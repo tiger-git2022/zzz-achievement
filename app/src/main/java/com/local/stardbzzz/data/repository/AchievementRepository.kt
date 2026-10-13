@@ -12,6 +12,7 @@ import com.local.stardbzzz.data.network.AchievementDto
 import com.local.stardbzzz.data.network.RngAchievementIconClient
 import com.local.stardbzzz.data.network.StardbApi
 import com.local.stardbzzz.data.network.parseAchievementTrackerData
+import com.local.stardbzzz.scan.ScanCandidate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
@@ -203,6 +204,28 @@ class AchievementRepository(
         remoteOperationMutex.withLock {
             syncCurrentLocked(id)
         }
+    }
+
+    suspend fun scanCandidates(): List<ScanCandidate> =
+        dao.allSnapshot().map { ScanCandidate(it.id, it.name, it.description, it.category, it.isCompleted) }
+
+    /** Applies completion states read from the game, then syncs them to stardb in one pass. */
+    suspend fun applyScannedCompletion(changes: Map<String, Boolean>) {
+        if (changes.isEmpty()) return
+        val all = dao.allSnapshot()
+        val byId = all.associateBy { it.id }
+        val now = System.currentTimeMillis()
+        changes.forEach { (id, completed) ->
+            val selected = byId[id] ?: return@forEach
+            all.filter { item ->
+                item.name == selected.name &&
+                    item.category == selected.category &&
+                    item.version == selected.version
+            }.forEach { linked ->
+                dao.updateCompletion(linked.id, completed, SyncStatus.Pending, now)
+            }
+        }
+        retryPendingSync()
     }
 
     fun clearRetainedVisibleAchievements() {

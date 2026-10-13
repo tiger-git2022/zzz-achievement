@@ -2,6 +2,7 @@ package com.local.stardbzzz.scan
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -60,6 +61,38 @@ class AchievementPageScannerTest {
         assertEquals(12, capture.rows.map { it.category }.toSet().size)
     }
 
+    @Test
+    fun ocrJitterBetweenFramesStillEndsEachList() = runBlocking {
+        // Real ML Kit reads of an unchanged frame differ by a character (叩响 → D响), so exact comparison
+        // never saw the list settle and rewound the first category until the page cap.
+        val game = FakeGame(
+            GameScreenParser.TabNames.associateWith { tab -> (1..3).map { c -> "${tab}分类$c" to rows("$tab$c", 8) } },
+            startAtBottom = true,
+            jitterRows = true,
+        )
+
+        val capture = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0)).scan()
+
+        val expected = game.tabs.values.flatten().flatMap { it.second }.toSet()
+        assertEquals(expected, capture.rows.map { game.unjitter(it.name) }.toSet())
+        // 12 categories of 8 rows need a handful of swipes each, nowhere near the 120-page cap.
+        assertTrue("swipes: ${game.swipes}", game.swipes < 12 * 12)
+    }
+
+    @Test
+    fun sameContentToleratesMisreadsButNotScrolling() {
+        val page = listOf("叩响命运之门", "「英雄」", "从零开始", "绳网新人", "空洞调查员")
+        assertTrue(AchievementPageScanner.sameContent(page, listOf("D响命运之门", "『英雄｣", "从雪开始", "绳网新人", "空洞调查员")))
+        assertTrue(AchievementPageScanner.sameContent(listOf("从零"), listOf("从雪")))
+        // One unreadable entry on a full page is forgiven; two are not.
+        assertTrue(AchievementPageScanner.sameContent(page, page.toMutableList().also { it[2] = "xxxx" }))
+        assertFalse(AchievementPageScanner.sameContent(page, page.toMutableList().also { it[2] = "xxxx"; it[3] = "yyyy" }))
+        // A one-row scroll shifts every position.
+        assertFalse(AchievementPageScanner.sameContent(page, page.drop(1) + "新的成就名称"))
+        assertFalse(AchievementPageScanner.sameContent(page, page.dropLast(1)))
+        assertTrue(AchievementPageScanner.sameContent(emptyList(), emptyList()))
+    }
+
     @Test(expected = MissingTabsException::class)
     fun failsInsteadOfSkippingAnUnreadableTab() {
         runBlocking {
@@ -84,7 +117,17 @@ class AchievementPageScannerTest {
         startAtBottom: Boolean = false,
         /** Simulates one OCR read that misses the sidebar right after it first scrolls. */
         private val dropSidebarAfterSidebarSwipe: Boolean = false,
+        /** Every other read garbles one character of each row name, like real OCR of an unchanged frame. */
+        private val jitterRows: Boolean = false,
     ) : ScreenReader, GestureInput {
+        var swipes = 0
+            private set
+        private var reads = 0
+
+        fun unjitter(name: String) = name.replace(JitterChar, "成")
+
+        private fun jitter(name: String) = if (jitterRows && reads % 2 == 0) name.replace("成", JitterChar) else name
+
         private var hideSidebarOnNextRead = false
         private var droppedSidebar = false
         private var tab = tabs.keys.firstOrNull()
@@ -116,6 +159,7 @@ class AchievementPageScannerTest {
         private val rowsInCategory get() = categories.getOrNull(category)?.second.orEmpty()
 
         override suspend fun read(): List<OcrBox> {
+            reads++
             val boxes = mutableListOf<OcrBox>()
             boxes += OcrBox("完成数", 0.10f, 0.03f, 0.14f, 0.06f)
             boxes += OcrBox("42", 0.10f, 0.064f, 0.13f, 0.094f)
@@ -131,7 +175,7 @@ class AchievementPageScannerTest {
             }
             rowsInCategory.drop(listOffset).take(VisibleRows).forEachIndexed { index, name ->
                 val y = 0.30f + index * 0.136f
-                boxes += OcrBox(name, 0.29f, y - 0.032f, 0.40f, y - 0.005f)
+                boxes += OcrBox(jitter(name), 0.29f, y - 0.032f, 0.40f, y - 0.005f)
                 boxes += OcrBox("描述$name", 0.29f, y + 0.003f, 0.45f, y + 0.028f)
                 boxes += OcrBox("2026年1月1日", 0.81f, y - 0.016f, 0.90f, y + 0.016f)
             }
@@ -148,6 +192,7 @@ class AchievementPageScannerTest {
         }
 
         override suspend fun swipe(from: ScreenPoint, to: ScreenPoint, durationMillis: Long) {
+            swipes++
             val forward = from.y > to.y
             if (from.x < 0.25f) {
                 val max = (categories.size - VisibleLabels).coerceAtLeast(0)
@@ -165,6 +210,7 @@ class AchievementPageScannerTest {
         private companion object {
             const val VisibleLabels = 6
             const val VisibleRows = 5
+            const val JitterChar = "戍"
         }
     }
 }

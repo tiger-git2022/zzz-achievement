@@ -126,7 +126,7 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
             return 1.0 - levenshtein(a, b).toDouble() / longest
         }
 
-        private fun levenshtein(a: String, b: String): Int {
+        fun levenshtein(a: String, b: String): Int {
             var previous = IntArray(b.length + 1) { it }
             var current = IntArray(b.length + 1)
             for (i in 1..a.length) {

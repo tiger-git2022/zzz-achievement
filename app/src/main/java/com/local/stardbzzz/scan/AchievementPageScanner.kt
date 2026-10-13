@@ -39,7 +39,8 @@ class MissingTabsException(tabs: Collection<String>) :
 
 /**
  * Walks every tab → sidebar category → list page of the in-game achievement screen and
- * collects the rows it reads. Scrolling stops when a page reads the same as the previous one.
+ * collects the rows it reads. Scrolling stops when a page reads the same as the previous one
+ * (allowing for OCR misreading a character or two between frames).
  */
 class AchievementPageScanner(
     private val reader: ScreenReader,
@@ -143,7 +144,7 @@ class AchievementPageScanner(
             val page = readPage()
             onPage(page)
             val names = contentOf(page)
-            if (names == previousNames) {
+            if (previousNames?.let { sameContent(it, names) } == true) {
                 if (++unchangedReads >= StableReads) return
             } else {
                 unchangedReads = 0
@@ -182,6 +183,35 @@ class AchievementPageScanner(
         private const val MaxPagesPerCategory = 120
         private const val PageReadAttempts = 3
         private const val StableReads = 2
+        private const val SameNameSimilarity = 0.7
+
+        /**
+         * Whether two reads of the same screen region show the same entries. OCR of an unchanged frame still
+         * varies (从零 → 从雪, 叩响 → D响, mangled brackets), so entries are compared position by position
+         * with some slack, and one unreadable entry is forgiven on a full page. Lists can hold near-identical
+         * names (a numbered series), so the reads also have to line up better as they are than shifted by
+         * any number of rows; otherwise the list moved.
+         */
+        fun sameContent(previous: List<String>, current: List<String>): Boolean {
+            val a = previous.map(AchievementMatcher::normalizeText)
+            val b = current.map(AchievementMatcher::normalizeText)
+            if (a.size != b.size) return false
+            if (a.isEmpty()) return true
+            val mismatches = a.indices.count { !similarEntry(a[it], b[it]) }
+            if (mismatches > if (a.size >= 4) 1 else 0) return false
+            val inPlace = alignment(a, b, 0)
+            return (1 until a.size).all { shift -> alignment(a, b, shift) < inPlace && alignment(a, b, -shift) < inPlace }
+        }
+
+        private fun similarEntry(a: String, b: String): Boolean =
+            a == b || AchievementMatcher.levenshtein(a, b) <= 1 ||
+                AchievementMatcher.similarity(a, b) >= SameNameSimilarity
+
+        /** Mean similarity of [a] against [b] moved by [shift] rows, over the rows both still show. */
+        private fun alignment(a: List<String>, b: List<String>, shift: Int): Double {
+            val pairs = a.indices.mapNotNull { i -> b.getOrNull(i - shift)?.let { a[i] to it } }
+            return pairs.sumOf { (x, y) -> AchievementMatcher.similarity(x, y) } / pairs.size
+        }
 
         // A ~0.40 screen-height drag moves the list about three rows (rows are ~0.136 apart, five are visible),
         // so consecutive pages overlap and no row is skipped.

@@ -39,7 +39,7 @@
 2. 点「授权屏幕录制」，然后切到游戏的成就页，点悬浮窗的「开始」。扫描期间不要触碰屏幕。
 3. 完成后点悬浮窗的「查看」，在 App 里勾选要同步的差异。默认只勾选「游戏已完成、本地未完成」的项目。
 
-实现：`scan/` 目录。MediaProjection 截屏 → ML Kit 中文 OCR（模型打包在 APK 内）→ `GameScreenParser` 按版面解析出页签、侧栏分类和成就行（右侧显示日期 = 已完成，显示 x/y = 未完成）→ `AchievementMatcher` 去掉标点后按编辑距离匹配本地成就名。开启「保存调试数据」后，每一屏的截图和识别文字会保存在 `Android/data/com.local.stardbzzz/files/scan-debug/`，TSV 格式与 `app/src/test/resources/ocr/` 下的测试数据相同。
+实现：`scan/` 目录。MediaProjection 截屏 → ML Kit 中文 OCR（模型打包在 APK 内）→ `GameScreenParser` 按版面解析出页签、侧栏分类和成就行（右侧显示日期 = 已完成，显示 x/y = 未完成）→ `AchievementMatcher` 去掉标点后按编辑距离匹配本地成就名。开启「保存调试数据」后，每一屏的截图和识别文字会保存在 `Android/data/com.local.stardbzzz/files/scan-debug/`，TSV 格式与 `app/src/test/resources/ocr/` 下的测试数据相同；同时保存本地成就列表、每帧所属分类和扫描报告，可以在电脑上用当前代码离线重跑，或对比其他 OCR 引擎，见 `tools/ocr-compare/README.md`。
 
 注意：自动操作游戏界面属于游戏用户协议禁止的行为，使用风险自负。
 
@@ -90,7 +90,7 @@ Settings → 游戏成就扫描 walks through the in-game achievement page, read
 2. Tap 「授权屏幕录制」 to allow screen capture, switch to the game's achievement page and tap 「开始」 on the floating window. Don't touch the screen while it scans.
 3. When it finishes, tap 「查看」 and pick the differences to sync. By default only "completed in game, not completed locally" items are selected.
 
-How it works (`scan/`): MediaProjection screenshots → ML Kit Chinese OCR (model bundled in the APK) → `GameScreenParser` reads tabs, sidebar categories and achievement rows (a date on the right = completed, `x/y` = in progress) → `AchievementMatcher` matches names to local achievements by edit distance. With 「保存调试数据」 on, each frame and its OCR text are saved under `Android/data/com.local.stardbzzz/files/scan-debug/`, in the same TSV format as `app/src/test/resources/ocr/`.
+How it works (`scan/`): MediaProjection screenshots → ML Kit Chinese OCR (model bundled in the APK) → `GameScreenParser` reads tabs, sidebar categories and achievement rows (a date on the right = completed, `x/y` = in progress) → `AchievementMatcher` matches names to local achievements by edit distance. With 「保存调试数据」 on, each frame and its OCR text are saved under `Android/data/com.local.stardbzzz/files/scan-debug/`, in the same TSV format as `app/src/test/resources/ocr/`, together with the local achievement list, the tab/category of each frame and the report, so a session can be replayed offline with the current code or another OCR engine (see `tools/ocr-compare/README.md`).
 
 Note: automating the game UI is against the game's terms of service. Use at your own risk.
 

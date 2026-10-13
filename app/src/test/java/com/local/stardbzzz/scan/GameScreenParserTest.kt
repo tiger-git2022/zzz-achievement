@@ -132,15 +132,28 @@ class GameScreenParserTest {
     }
 
     @Test
-    fun oneNearMatchCannotStandForTwoTabs() {
-        // 故市 is one character off both 故事 and 城市; it may fill only one of them.
+    fun aNearMatchForTwoMissingTabsIsSkipped() {
+        // 故市 is one character off both 故事 and 城市; guessing could send the 故事 tap to 城市.
         val boxes = loadFixture("mlkit-story-frame2")
-            .filterNot { it.text == "城市" }
-            .map { if (it.text == "故事") it.copy(text = "故市") else it }
+            .filterNot { it.text == "故事" }
+            .map { if (it.text == "城市") it.copy(text = "故市") else it }
 
         val screen = GameScreenParser.parse(boxes)
 
-        assertEquals(3, screen.tabs.size)
+        assertEquals(setOf("战术", "探索"), screen.tabs.keys)
+    }
+
+    @Test
+    fun aNearMatchForOneMissingTabCounts() {
+        // With 城市 read correctly, 故市 can only be 故事.
+        val frame = loadFixture("mlkit-story-frame2")
+        val story = frame.single { it.text == "故事" }
+        val boxes = frame.map { if (it === story) it.copy(text = "故市") else it }
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(story.centerX, screen.tabs.getValue("故事").x, 0.001f)
+        assertEquals(4, screen.tabs.size)
     }
 
     @Test

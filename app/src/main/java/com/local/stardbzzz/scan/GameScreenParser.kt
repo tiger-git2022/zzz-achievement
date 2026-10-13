@@ -91,23 +91,29 @@ object GameScreenParser {
         // Exact names first; then, for any still missing, a read with one of its two characters wrong
         // (ML Kit reads 探索 as 採索 on every frame of one phone). A near match only counts as a box of its
         // own: inside a merged line its midpoint could fall between two tabs.
-        for (exact in listOf(true, false)) {
-            bar.forEachIndexed { boxIndex, box ->
-                // The tabs may come back as one merged line; place each name proportionally inside the box.
-                val text = box.text
-                TabNames.forEach { name ->
-                    if (name in tabs) return@forEach
-                    if (!exact && text.length != name.length) return@forEach
-                    val index = findName(text, name, claimed[boxIndex], exact)
-                    if (index >= 0) {
-                        name.indices.forEach { claimed[boxIndex][index + it] = true }
-                        val fraction = (index + name.length / 2f) / text.length
-                        tabs[name] = ScreenPoint(box.left + (box.right - box.left) * fraction, box.centerY)
-                    }
-                }
+        bar.forEachIndexed { boxIndex, box ->
+            // The tabs may come back as one merged line; place each name proportionally inside the box.
+            TabNames.forEach { name ->
+                if (name in tabs) return@forEach
+                val index = findName(box.text, name, claimed[boxIndex], exact = true)
+                if (index >= 0) tabs[name] = claim(box, claimed[boxIndex], name, index)
             }
         }
+        bar.forEachIndexed { boxIndex, box ->
+            // A read one character off two missing names (故市: 故事 or 城市?) can't be placed; skip it.
+            val candidates = TabNames.filter { name ->
+                name !in tabs && box.text.length == name.length &&
+                    findName(box.text, name, claimed[boxIndex], exact = false) == 0
+            }
+            candidates.singleOrNull()?.let { name -> tabs[name] = claim(box, claimed[boxIndex], name, 0) }
+        }
         return tabs
+    }
+
+    private fun claim(box: OcrBox, claimed: BooleanArray, name: String, index: Int): ScreenPoint {
+        name.indices.forEach { claimed[index + it] = true }
+        val fraction = (index + name.length / 2f) / box.text.length
+        return ScreenPoint(box.left + (box.right - box.left) * fraction, box.centerY)
     }
 
     /** Start of the first unclaimed window of [text] matching [name] exactly, or in all but one character. */

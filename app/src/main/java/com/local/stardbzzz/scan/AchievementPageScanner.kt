@@ -34,6 +34,9 @@ data class ScanCapture(
 
 class NotOnAchievementPageException : IllegalStateException("没有识别到游戏的成就页，请先打开成就页面再开始扫描")
 
+class MissingTabsException(tabs: Collection<String>) :
+    IllegalStateException("没有识别到页签：${tabs.joinToString("、")}，请确认成就页完整显示后重试")
+
 /**
  * Walks every tab → sidebar category → list page of the in-game achievement screen and
  * collects the rows it reads. Scrolling stops when a page reads the same as the previous one.
@@ -52,9 +55,9 @@ class AchievementPageScanner(
 
     suspend fun scan(): ScanCapture {
         val first = readPage()
-        val tabs = first.tabs
+        val tabs = findAllTabs(first)
         for (tab in GameScreenParser.TabNames) {
-            val position = tabs[tab] ?: continue
+            val position = tabs.getValue(tab)
             currentTab = tab
             currentCategory = null
             report()
@@ -63,6 +66,19 @@ class AchievementPageScanner(
             scanTab(tab)
         }
         return ScanCapture(rows.toList(), first.completedCount)
+    }
+
+    /** A page counts as the achievement page with 3 of 4 tabs; re-read so a single OCR miss can't drop a whole tab. */
+    private suspend fun findAllTabs(first: ParsedScreen): Map<String, ScreenPoint> {
+        val tabs = first.tabs.toMutableMap()
+        repeat(PageReadAttempts) {
+            if (tabs.size == GameScreenParser.TabNames.size) return tabs
+            delay(timings.afterSwipeMillis)
+            readPage().tabs.forEach { (name, position) -> tabs.putIfAbsent(name, position) }
+        }
+        val missing = GameScreenParser.TabNames.filterNot { it in tabs }
+        if (missing.isNotEmpty()) throw MissingTabsException(missing)
+        return tabs
     }
 
     private suspend fun scanTab(tab: String) {
@@ -91,22 +107,44 @@ class AchievementPageScanner(
     }
 
     private suspend fun scanCategory(tab: String, category: String) {
-        // Start from the top in case the game kept an earlier scroll position.
+        // The game may keep an earlier scroll position, so fling back up until the list stops moving.
         input.swipe(ListSwipeTo, ListSwipeFrom, timings.flingMillis)
         delay(timings.afterSwipeMillis)
+        scrollUntilStable(ListSwipeTo, ListSwipeFrom, timings.flingMillis) {}
 
-        var previousNames: List<String>? = null
-        repeat(MaxPagesPerCategory) {
-            val page = readPage()
+        scrollUntilStable(ListSwipeFrom, ListSwipeTo, timings.swipeMillis) { page ->
             page.rows.forEach { row ->
                 rows += ObservedRow(tab, category, row.name, row.description, row.status)
                 seenNames += AchievementMatcher.normalizeText(row.name)
             }
             report()
+        }
+    }
+
+    /**
+     * Reads a page, swipes, and repeats until the list reads the same [StableReads] times in a row.
+     * Requiring more than one unchanged read (each after another swipe) keeps a slow animation or a
+     * frame that hasn't arrived yet from being mistaken for the end of the list.
+     */
+    private suspend fun scrollUntilStable(
+        from: ScreenPoint,
+        to: ScreenPoint,
+        swipeMillis: Long,
+        onPage: (ParsedScreen) -> Unit,
+    ) {
+        var previousNames: List<String>? = null
+        var unchangedReads = 0
+        repeat(MaxPagesPerCategory) {
+            val page = readPage()
+            onPage(page)
             val names = page.rows.map { it.name }
-            if (names == previousNames) return
+            if (names == previousNames) {
+                if (++unchangedReads >= StableReads) return
+            } else {
+                unchangedReads = 0
+            }
             previousNames = names
-            input.swipe(ListSwipeFrom, ListSwipeTo, timings.swipeMillis)
+            input.swipe(from, to, swipeMillis)
             delay(timings.afterSwipeMillis)
         }
     }
@@ -138,6 +176,7 @@ class AchievementPageScanner(
         private const val MaxSidebarScrolls = 6
         private const val MaxPagesPerCategory = 120
         private const val PageReadAttempts = 3
+        private const val StableReads = 2
 
         // A ~0.40 screen-height drag moves the list about three rows (rows are ~0.136 apart, five are visible),
         // so consecutive pages overlap and no row is skipped.

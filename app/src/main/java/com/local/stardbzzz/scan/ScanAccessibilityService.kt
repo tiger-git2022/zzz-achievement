@@ -58,13 +58,21 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
 
     override suspend fun tap(point: ScreenPoint) {
         val (x, y) = toPixels(point)
-        dispatch(Path().apply { moveTo(x, y) }, TapMillis)
+        dispatchOrFail(Path().apply { moveTo(x, y) }, TapMillis)
     }
 
     override suspend fun swipe(from: ScreenPoint, to: ScreenPoint, durationMillis: Long) {
         val (startX, startY) = toPixels(from)
         val (endX, endY) = toPixels(to)
-        dispatch(Path().apply { moveTo(startX, startY); lineTo(endX, endY) }, durationMillis.coerceAtLeast(1))
+        dispatchOrFail(Path().apply { moveTo(startX, startY); lineTo(endX, endY) }, durationMillis.coerceAtLeast(1))
+    }
+
+    /** A gesture the system cancelled (usually because the screen was touched) would desync the scan, so stop it. */
+    private suspend fun dispatchOrFail(path: Path, durationMillis: Long) {
+        repeat(GestureAttempts) {
+            if (dispatch(path, durationMillis)) return
+        }
+        throw IllegalStateException("自动操作被系统取消，扫描期间请不要触碰屏幕")
     }
 
     private fun toPixels(point: ScreenPoint): Pair<Float, Float> {
@@ -72,21 +80,21 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
         return point.x * size.x to point.y * size.y
     }
 
-    private suspend fun dispatch(path: Path, durationMillis: Long) = withContext(Dispatchers.Main) {
+    private suspend fun dispatch(path: Path, durationMillis: Long): Boolean = withContext(Dispatchers.Main) {
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, durationMillis))
             .build()
         suspendCancellableCoroutine { continuation ->
             val callback = object : AccessibilityService.GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
-                    if (continuation.isActive) continuation.resume(Unit)
+                    if (continuation.isActive) continuation.resume(true)
                 }
 
                 override fun onCancelled(gestureDescription: GestureDescription?) {
-                    if (continuation.isActive) continuation.resume(Unit)
+                    if (continuation.isActive) continuation.resume(false)
                 }
             }
-            if (!dispatchGesture(gesture, callback, null) && continuation.isActive) continuation.resume(Unit)
+            if (!dispatchGesture(gesture, callback, null) && continuation.isActive) continuation.resume(false)
         }
     }
 
@@ -208,5 +216,6 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
 
     private companion object {
         const val TapMillis = 60L
+        const val GestureAttempts = 2
     }
 }

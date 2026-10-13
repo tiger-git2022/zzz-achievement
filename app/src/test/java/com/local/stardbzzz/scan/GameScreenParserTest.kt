@@ -67,6 +67,8 @@ class GameScreenParserTest {
         assertEquals(RowStatus.Completed("2026-07-11"), GameScreenParser.parseStatus("@ 2026年7月11日"))
         assertEquals(RowStatus.Completed(null), GameScreenParser.parseStatus("01/01"))
         assertEquals(RowStatus.InProgress(0, 1), GameScreenParser.parseStatus("00/01"))
+        // 18329724/100000000 with a dropped digit must not turn into a completion.
+        assertNull(GameScreenParser.parseStatus("18329724/10000000"))
         assertEquals(RowStatus.Completed(null), GameScreenParser.parseStatus("领取"))
         assertNull(GameScreenParser.parseStatus("20"))
         assertNull(GameScreenParser.parseStatus("TITLE"))

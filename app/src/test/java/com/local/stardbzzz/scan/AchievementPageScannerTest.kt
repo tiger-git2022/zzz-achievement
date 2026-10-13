@@ -29,6 +29,28 @@ class AchievementPageScannerTest {
         assertTrue(capture.rows.all { it.status == RowStatus.Completed("2026-01-01") })
     }
 
+    @Test
+    fun returnsToTopWhenGameKeepsScrollPosition() = runBlocking {
+        // Each category starts scrolled to the bottom, and a fling only moves three rows up.
+        val game = FakeGame(
+            GameScreenParser.TabNames.associateWith { tab -> listOf("${tab}分类" to rows(tab, 20)) },
+            startAtBottom = true,
+        )
+
+        val capture = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0)).scan()
+
+        assertEquals(80, capture.rows.map { it.name }.toSet().size)
+    }
+
+    @Test(expected = MissingTabsException::class)
+    fun failsInsteadOfSkippingAnUnreadableTab() {
+        runBlocking {
+            val game = FakeGame(GameScreenParser.TabNames.associateWith { listOf("${it}分类" to rows(it, 3)) })
+            val withoutExplore = ScreenReader { game.read().filterNot { it.text == "探索" } }
+            AchievementPageScanner(withoutExplore, game, ScanTimings(0, 0, 0, 0)).scan()
+        }
+    }
+
     @Test(expected = NotOnAchievementPageException::class)
     fun failsWhenNotOnAchievementPage() {
         runBlocking {
@@ -39,11 +61,25 @@ class AchievementPageScannerTest {
     private fun rows(prefix: String, count: Int) = (1..count).map { "${prefix}成就$it" }
 
     /** A minimal model of the achievement page: 6 visible sidebar labels, 5 visible rows, 3-row scroll steps. */
-    private class FakeGame(val tabs: Map<String, List<Pair<String, List<String>>>>) : ScreenReader, GestureInput {
+    private class FakeGame(
+        val tabs: Map<String, List<Pair<String, List<String>>>>,
+        startAtBottom: Boolean = false,
+    ) : ScreenReader, GestureInput {
         private var tab = tabs.keys.firstOrNull()
         private var category = 0
         private var sidebarOffset = 0
-        private var listOffset = 0
+
+        // The game remembers each category's scroll position.
+        private val listOffsets = tabs.flatMap { (tab, categories) ->
+            categories.mapIndexed { index, (_, rows) ->
+                (tab to index) to if (startAtBottom) (rows.size - VisibleRows).coerceAtLeast(0) else 0
+            }
+        }.toMap<Pair<String?, Int>, Int>().toMutableMap()
+        private var listOffset: Int
+            get() = listOffsets[tab to category] ?: 0
+            set(value) {
+                listOffsets[tab to category] = value
+            }
 
         private val categories get() = tabs[tab].orEmpty()
         private val rowsInCategory get() = categories.getOrNull(category)?.second.orEmpty()
@@ -74,10 +110,8 @@ class AchievementPageScannerTest {
                 tab = GameScreenParser.TabNames[((point.x - 0.50f) / 0.125f).toInt()]
                 category = 0
                 sidebarOffset = 0
-                listOffset = 0
             } else if (point.x < 0.25f) {
                 category = sidebarOffset + ((point.y - 0.35f + 0.04f) / 0.0845f).toInt()
-                listOffset = 0
             }
         }
 
@@ -88,7 +122,7 @@ class AchievementPageScannerTest {
                 sidebarOffset = if (forward) (sidebarOffset + 3).coerceAtMost(max) else 0
             } else {
                 val max = (rowsInCategory.size - VisibleRows).coerceAtLeast(0)
-                listOffset = if (forward) (listOffset + 3).coerceAtMost(max) else 0
+                listOffset = (listOffset + if (forward) 3 else -3).coerceIn(0, max)
             }
         }
 

@@ -73,9 +73,10 @@ object GameScreenParser {
         ProgressRegex.find(text)?.let { match ->
             val current = match.groupValues[1].toLongOrNull() ?: return null
             val target = match.groupValues[2].toLongOrNull() ?: return null
-            if (target <= 0) return null
+            // A counter above its target can only be a misread (e.g. a dropped digit); don't guess.
+            if (target <= 0 || current > target) return null
             // Reached but not yet claimed: the game would show a claim button instead of a date.
-            return if (current >= target) RowStatus.Completed(null) else RowStatus.InProgress(current, target)
+            return if (current == target) RowStatus.Completed(null) else RowStatus.InProgress(current, target)
         }
         if (text.contains("领取")) return RowStatus.Completed(null)
         return null

@@ -112,16 +112,27 @@ class AchievementPageScannerTest {
 
     @Test
     fun sameContentToleratesMisreadsButNotScrolling() {
-        val page = listOf("叩响命运之门", "「英雄」", "从零开始", "绳网新人", "空洞调查员")
-        assertTrue(AchievementPageScanner.sameContent(page, listOf("D响命运之门", "『英雄｣", "从雪开始", "绳网新人", "空洞调查员")))
+        val page = listOf("叩响命运之门", "「英雄」的名字", "从零开始的绳匠生活", "欢迎新员工!", "治安官的答案")
+        assertTrue(AchievementPageScanner.sameContent(page, listOf("D响命运之门", "『英雄｣的名字", "从雪开始的绳匠生活", "欢迎新员工!", "治安官的答案")))
         assertTrue(AchievementPageScanner.sameContent(listOf("从零"), listOf("从雪")))
-        // One unreadable entry on a full page is forgiven; two are not.
+        // One unreadable or missing entry on a full page is forgiven; two are not.
         assertTrue(AchievementPageScanner.sameContent(page, page.toMutableList().also { it[2] = "xxxx" }))
         assertFalse(AchievementPageScanner.sameContent(page, page.toMutableList().also { it[2] = "xxxx"; it[3] = "yyyy" }))
+        assertTrue(AchievementPageScanner.sameContent(page, page - page[2]))
+        assertTrue(AchievementPageScanner.sameContent(page - page[0], page))
+        assertFalse(AchievementPageScanner.sameContent(page, page.drop(2)))
         // A one-row scroll shifts every position.
         assertFalse(AchievementPageScanner.sameContent(page, page.drop(1) + "新的成就名称"))
-        assertFalse(AchievementPageScanner.sameContent(page, page.dropLast(1)))
         assertTrue(AchievementPageScanner.sameContent(emptyList(), emptyList()))
+    }
+
+    @Test
+    fun tiersOfOneAchievementAreNotTakenForEachOther() {
+        // Same name, descriptions differing only in the number: a scrolled list must not read as unchanged.
+        val tiers = listOf(10, 20, 50, 100, 200, 500, 1000, 2000).map { "空洞探索者 累计完成${it}次委托" }
+        assertFalse(AchievementPageScanner.sameContent(tiers.take(5), tiers.drop(3).take(5)))
+        assertFalse(AchievementPageScanner.sameContent(tiers.take(5), tiers.drop(1).take(5)))
+        assertTrue(AchievementPageScanner.sameContent(tiers.take(5), tiers.take(5).map { it.replace("空洞", "空同") }))
     }
 
     @Test(expected = MissingTabsException::class)

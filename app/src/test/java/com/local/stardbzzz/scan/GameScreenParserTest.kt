@@ -106,6 +106,20 @@ class GameScreenParserTest {
         assertEquals("完成法厄同纪事『非常任务』。", screen.rows.single().description)
     }
 
+    @Test
+    fun consecutiveMlKitReadsOfAnUnchangedScreenCountAsTheSame() {
+        // Two ML Kit reads of the same, unmoving screen from the first real-phone scan.
+        val first = GameScreenParser.parse(loadFixture("mlkit-story-frame1"))
+        val second = GameScreenParser.parse(loadFixture("mlkit-story-frame2"))
+
+        assertEquals(5, first.rows.size)
+        assertEquals(5, second.rows.size)
+        assertEquals(631, second.completedCount)
+        val entries = { screen: ParsedScreen -> screen.rows.map { "${it.name} ${it.description}" } }
+        assertTrue(AchievementPageScanner.sameContent(entries(first), entries(second)))
+        assertTrue(AchievementPageScanner.sameContent(first.sidebar.map { it.text }, second.sidebar.map { it.text }))
+    }
+
     private fun loadFixture(name: String): List<OcrBox> {
         val stream = javaClass.classLoader!!.getResourceAsStream("ocr/$name.tsv")
         return stream.bufferedReader().readLines()

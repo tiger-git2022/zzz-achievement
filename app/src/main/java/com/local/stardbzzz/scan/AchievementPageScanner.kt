@@ -114,9 +114,9 @@ class AchievementPageScanner(
 
     private suspend fun scanCategory(tab: String, category: String) {
         // The game may keep an earlier scroll position, so fling back up until the list stops moving.
-        scrollUntilStable(ListSwipeTo, ListSwipeFrom, timings.flingMillis, ::rowNames) {}
+        scrollUntilStable(ListSwipeTo, ListSwipeFrom, timings.flingMillis, ::rowEntries) {}
 
-        scrollUntilStable(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, ::rowNames) { page ->
+        scrollUntilStable(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, ::rowEntries) { page ->
             page.rows.forEach { row ->
                 rows += ObservedRow(tab, category, row.name, row.description, row.status)
                 seenNames += AchievementMatcher.normalizeText(row.name)
@@ -125,7 +125,8 @@ class AchievementPageScanner(
         }
     }
 
-    private fun rowNames(page: ParsedScreen): List<String> = page.rows.map { it.name }
+    /** Name plus description: tiers of one achievement share a name and differ only in the description's numbers. */
+    private fun rowEntries(page: ParsedScreen): List<String> = page.rows.map { "${it.name} ${it.description}" }
 
     /**
      * Reads a page, swipes, and repeats until [contentOf] reads the same [StableReads] times in a row.
@@ -198,31 +199,32 @@ class AchievementPageScanner(
 
         /**
          * Whether two reads of the same screen region show the same entries. OCR of an unchanged frame still
-         * varies (从零 → 从雪, 叩响 → D响, mangled brackets), so entries are compared position by position
-         * with some slack, and one unreadable entry is forgiven on a full page. Lists can hold near-identical
-         * names (a numbered series), so the reads also have to line up better as they are than shifted by
-         * any number of rows; otherwise the list moved.
+         * varies (从零 → 从雪, 叩响 → D响, mangled brackets) and can drop an entry, so on a full page one
+         * entry may be misread or missing. Entries are compared position by position: a scroll of even one row
+         * shifts every position, and numbers must match exactly, so tiers of one achievement (same name,
+         * 10 vs 50 in the description) are never taken for each other.
          */
         fun sameContent(previous: List<String>, current: List<String>): Boolean {
             val a = previous.map(AchievementMatcher::normalizeText)
             val b = current.map(AchievementMatcher::normalizeText)
-            if (a.size != b.size) return false
-            if (a.isEmpty()) return true
-            val mismatches = a.indices.count { !similarEntry(a[it], b[it]) }
-            if (mismatches > if (a.size >= 4) 1 else 0) return false
-            val inPlace = alignment(a, b, 0)
-            return (1 until a.size).all { shift -> alignment(a, b, shift) < inPlace && alignment(a, b, -shift) < inPlace }
+            val forgiven = if (maxOf(a.size, b.size) >= 4) 1 else 0
+            return when (a.size - b.size) {
+                0 -> a.indices.count { !similarEntry(a[it], b[it]) } <= forgiven
+                1 -> forgiven == 1 && missingOne(longer = a, shorter = b)
+                -1 -> forgiven == 1 && missingOne(longer = b, shorter = a)
+                else -> false
+            }
         }
+
+        /** [shorter] is [longer] with one entry left out and everything else read alike. */
+        private fun missingOne(longer: List<String>, shorter: List<String>): Boolean =
+            longer.indices.any { skipped ->
+                shorter.indices.all { i -> similarEntry(longer[if (i < skipped) i else i + 1], shorter[i]) }
+            }
 
         private fun similarEntry(a: String, b: String): Boolean =
-            a == b || AchievementMatcher.levenshtein(a, b) <= 1 ||
-                AchievementMatcher.similarity(a, b) >= SameNameSimilarity
-
-        /** Mean similarity of [a] against [b] moved by [shift] rows, over the rows both still show. */
-        private fun alignment(a: List<String>, b: List<String>, shift: Int): Double {
-            val pairs = a.indices.mapNotNull { i -> b.getOrNull(i - shift)?.let { a[i] to it } }
-            return pairs.sumOf { (x, y) -> AchievementMatcher.similarity(x, y) } / pairs.size
-        }
+            a.filter { it.isDigit() } == b.filter { it.isDigit() } &&
+                (a == b || AchievementMatcher.levenshtein(a, b) <= 1 || AchievementMatcher.similarity(a, b) >= SameNameSimilarity)
 
         // A ~0.40 screen-height drag moves the list about three rows (rows are ~0.136 apart, five are visible),
         // so consecutive pages overlap and no row is skipped.

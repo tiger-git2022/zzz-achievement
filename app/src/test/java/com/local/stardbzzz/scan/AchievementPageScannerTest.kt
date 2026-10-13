@@ -31,15 +31,16 @@ class AchievementPageScannerTest {
 
     @Test
     fun returnsToTopWhenGameKeepsScrollPosition() = runBlocking {
-        // Each category starts scrolled to the bottom, and a fling only moves three rows up.
+        // Every list and sidebar starts scrolled to the bottom, and a fling only moves three entries up.
         val game = FakeGame(
-            GameScreenParser.TabNames.associateWith { tab -> listOf("${tab}分类" to rows(tab, 20)) },
+            GameScreenParser.TabNames.associateWith { tab -> (1..9).map { c -> "${tab}分类$c" to rows("$tab$c", 8) } },
             startAtBottom = true,
         )
 
         val capture = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0)).scan()
 
-        assertEquals(80, capture.rows.map { it.name }.toSet().size)
+        assertEquals(36, capture.rows.map { it.category }.toSet().size)
+        assertEquals(4 * 9 * 8, capture.rows.map { it.name }.toSet().size)
     }
 
     @Test(expected = MissingTabsException::class)
@@ -67,7 +68,16 @@ class AchievementPageScannerTest {
     ) : ScreenReader, GestureInput {
         private var tab = tabs.keys.firstOrNull()
         private var category = 0
-        private var sidebarOffset = 0
+
+        // The game remembers each tab's sidebar position.
+        private val sidebarOffsets = tabs.mapValues { (_, categories) ->
+            if (startAtBottom) (categories.size - VisibleLabels).coerceAtLeast(0) else 0
+        }.toMutableMap<String?, Int>()
+        private var sidebarOffset: Int
+            get() = sidebarOffsets[tab] ?: 0
+            set(value) {
+                sidebarOffsets[tab] = value
+            }
 
         // The game remembers each category's scroll position.
         private val listOffsets = tabs.flatMap { (tab, categories) ->
@@ -109,7 +119,6 @@ class AchievementPageScannerTest {
             if (point.y < 0.12f) {
                 tab = GameScreenParser.TabNames[((point.x - 0.50f) / 0.125f).toInt()]
                 category = 0
-                sidebarOffset = 0
             } else if (point.x < 0.25f) {
                 category = sidebarOffset + ((point.y - 0.35f + 0.04f) / 0.0845f).toInt()
             }
@@ -119,7 +128,7 @@ class AchievementPageScannerTest {
             val forward = from.y > to.y
             if (from.x < 0.25f) {
                 val max = (categories.size - VisibleLabels).coerceAtLeast(0)
-                sidebarOffset = if (forward) (sidebarOffset + 3).coerceAtMost(max) else 0
+                sidebarOffset = (sidebarOffset + if (forward) 3 else -3).coerceIn(0, max)
             } else {
                 val max = (rowsInCategory.size - VisibleRows).coerceAtLeast(0)
                 listOffset = (listOffset + if (forward) 3 else -3).coerceIn(0, max)

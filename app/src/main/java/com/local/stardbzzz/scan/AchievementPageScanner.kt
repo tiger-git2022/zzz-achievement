@@ -82,6 +82,9 @@ class AchievementPageScanner(
     }
 
     private suspend fun scanTab(tab: String) {
+        // The sidebar may keep an earlier scroll position too; categories above it would never be seen.
+        scrollUntilStable(SidebarSwipeTo, SidebarSwipeFrom, timings.flingMillis, { page -> page.sidebar.map { it.text } }) {}
+
         val visited = mutableListOf<String>()
         var sidebarScrolls = 0
         while (visited.size < MaxCategoriesPerTab) {
@@ -108,11 +111,9 @@ class AchievementPageScanner(
 
     private suspend fun scanCategory(tab: String, category: String) {
         // The game may keep an earlier scroll position, so fling back up until the list stops moving.
-        input.swipe(ListSwipeTo, ListSwipeFrom, timings.flingMillis)
-        delay(timings.afterSwipeMillis)
-        scrollUntilStable(ListSwipeTo, ListSwipeFrom, timings.flingMillis) {}
+        scrollUntilStable(ListSwipeTo, ListSwipeFrom, timings.flingMillis, ::rowNames) {}
 
-        scrollUntilStable(ListSwipeFrom, ListSwipeTo, timings.swipeMillis) { page ->
+        scrollUntilStable(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, ::rowNames) { page ->
             page.rows.forEach { row ->
                 rows += ObservedRow(tab, category, row.name, row.description, row.status)
                 seenNames += AchievementMatcher.normalizeText(row.name)
@@ -121,8 +122,10 @@ class AchievementPageScanner(
         }
     }
 
+    private fun rowNames(page: ParsedScreen): List<String> = page.rows.map { it.name }
+
     /**
-     * Reads a page, swipes, and repeats until the list reads the same [StableReads] times in a row.
+     * Reads a page, swipes, and repeats until [contentOf] reads the same [StableReads] times in a row.
      * Requiring more than one unchanged read (each after another swipe) keeps a slow animation or a
      * frame that hasn't arrived yet from being mistaken for the end of the list.
      */
@@ -130,6 +133,7 @@ class AchievementPageScanner(
         from: ScreenPoint,
         to: ScreenPoint,
         swipeMillis: Long,
+        contentOf: (ParsedScreen) -> List<String>,
         onPage: (ParsedScreen) -> Unit,
     ) {
         var previousNames: List<String>? = null
@@ -137,7 +141,7 @@ class AchievementPageScanner(
         repeat(MaxPagesPerCategory) {
             val page = readPage()
             onPage(page)
-            val names = page.rows.map { it.name }
+            val names = contentOf(page)
             if (names == previousNames) {
                 if (++unchangedReads >= StableReads) return
             } else {

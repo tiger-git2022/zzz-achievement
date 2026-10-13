@@ -43,6 +43,23 @@ class ScanReportTest {
     }
 
     @Test
+    fun leavesAmbiguousDuplicateNamesUnmatched() {
+        // Same name in two categories, no category hint and no description to tell them apart.
+        assertNull(matcher.match("公平竞争制度", "", null))
+    }
+
+    @Test
+    fun acceptsDuplicateRecordsOfTheSameAchievement() {
+        val duplicated = AchievementMatcher(
+            listOf(
+                candidate("7", "治安官的答案", "完成法厄同纪事「非常任务」。", "法厄同纪事"),
+                candidate("8", "治安官的答案", "完成法厄同纪事「非常任务」。", "法厄同纪事"),
+            ),
+        )
+        assertEquals("7", duplicated.match("治安官的答案", "", null)?.id)
+    }
+
+    @Test
     fun rejectsUnrelatedText() {
         assertNull(matcher.match("在「实习生事故实录」中，救出所有走失的邦布商人。", "", null))
         assertNull(matcher.match("全部领取", "", null))

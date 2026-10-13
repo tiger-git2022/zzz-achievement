@@ -74,12 +74,19 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
         val scored = pool.map { candidate -> candidate to candidate.names.maxOf { similarity(it, name) } }
         val bestScore = scored.maxOf { it.second }
         if (bestScore < NameThreshold) return null
-        // Same or near-same names (e.g. per-version duplicates) are separated by their description.
-        return scored
-            .filter { it.second >= bestScore - TieMargin }
-            .maxByOrNull { (candidate, score) -> score + similarity(candidate.description, description) * 0.01 }
-            ?.first
-            ?.candidate
+        val tied = scored.filter { it.second >= bestScore - TieMargin }.map { it.first }
+        if (tied.size == 1) return tied.single().candidate
+
+        // Same or near-same names are told apart by description; if the read can't tell them apart,
+        // leave the row unmatched rather than guess and sync the wrong achievement.
+        val byDescription = tied
+            .map { it to similarity(it.description, description) }
+            .sortedByDescending { it.second }
+        val (best, bestDescriptionScore) = byDescription.first()
+        // Records with the same description are the same achievement listed twice; either one works.
+        val rival = byDescription.firstOrNull { it.first.description != best.description } ?: return best.candidate
+        if (description.isEmpty() || bestDescriptionScore - rival.second < DescriptionMargin) return null
+        return best.candidate
     }
 
     private data class PreparedCandidate(
@@ -93,6 +100,7 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
         private const val NameThreshold = 0.75
         private const val CategoryThreshold = 0.6
         private const val TieMargin = 0.02
+        private const val DescriptionMargin = 0.15
         private const val DescriptionPrefix = 40
         private val GenderVariantRegex = Regex("""\{M#([^{}]*)\}\{F#([^{}]*)\}""", RegexOption.IGNORE_CASE)
 

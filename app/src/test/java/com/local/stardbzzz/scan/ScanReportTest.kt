@@ -224,6 +224,65 @@ class ScanReportTest {
         assertEquals(2, report.gameCompletedSeen)
     }
 
+    @Test
+    fun matchesEitherNameOfASlashPair() {
+        val pair = AchievementMatcher(listOf(candidate("p", "执事的晚安/晚安大小姐", "", "代理人秘闻")))
+
+        assertEquals("p", pair.match("执事的晚安", "", "代理人秘闻")?.id)
+        assertEquals("p", pair.match("晚安大小姐", "", "代理人秘闻")?.id)
+    }
+
+    @Test
+    fun lookAlikeSwapsCostLessThanOtherEdits() {
+        val local = AchievementMatcher(
+            listOf(
+                candidate("m", "梦魇的梦魇", "", "敌对目标"),
+                candidate("f", "风起云涌Ⅰ", "", "战斗成就"),
+            ),
+        )
+
+        // Two swapped characters in five: a plain edit distance (0.6) would reject this.
+        assertEquals("m", local.match("梦魔的梦魔", "", "敌对目标")?.id)
+        assertEquals("f", local.match("凤起云涌|", "", "战斗成就")?.id)
+        // Two unrelated characters are still too many.
+        assertNull(local.match("梦话的梦想", "", "敌对目标"))
+    }
+
+    @Test
+    fun aSharedNameIsNotMatchedInAnotherCategory() {
+        val local = AchievementMatcher(
+            listOf(
+                candidate("h1", "英雄之旅", "在「预言之下」中，赢得一场史诗般的单挑。", "空洞探索指南"),
+                candidate("h2", "英雄之旅", "完成所有英雄委托。", "代理人秘闻"),
+                candidate("u", "只是来串个门", "破译绘本残页。", "勘域探境"),
+            ),
+        )
+
+        // The row's own category doesn't list it locally (an outdated list): don't hand it to a namesake.
+        assertNull(local.match("英雄之旅", "", "零号密钥"))
+        // A unique name is still safe outside its category, e.g. after a category rename.
+        assertEquals("u", local.match("只是來串个们", "", "零号密钥")?.id)
+        // In its own category the right namesake is found.
+        assertEquals("h2", local.match("英雄之旅", "", "代理人秘闻")?.id)
+    }
+
+    @Test
+    fun dropsClippedHeadsAndTailsOfLocalNames() {
+        val local = listOf(candidate("s", "献给第一位主人的使命", "", "代理人秘闻"))
+        val observed = listOf(
+            ObservedRow("故事", "代理人秘闻", "献给第一位主人的使命", "", RowStatus.Completed(null)),
+            // The same row cut off at the top of the list on the previous page.
+            ObservedRow("故事", "代理人秘闻", "位主人的使命", "", RowStatus.Completed(null)),
+            ObservedRow("故事", "代理人秘闻", "完全没有的成就", "", RowStatus.Completed(null)),
+        )
+
+        val report = ScanReportBuilder.build(observed, local, gameCompletedCount = null)
+
+        assertEquals(listOf("完全没有的成就"), report.unmatched.map { it.name })
+        assertEquals(1, report.clippedReads)
+        assertEquals(2, report.gameCompletedSeen)
+    }
+
     private fun candidate(id: String, name: String, description: String, category: String, completed: Boolean = false) =
         ScanCandidate(id, name, description, category, completed)
 }

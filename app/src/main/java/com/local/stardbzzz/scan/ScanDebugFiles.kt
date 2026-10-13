@@ -76,6 +76,7 @@ object ScanDebugFiles {
         appendLine("识别\t${report.observedCount}")
         appendLine("匹配\t${report.matchedCount}")
         appendLine("未匹配\t${report.unmatched.size}")
+        appendLine("忽略的半截名字\t${report.clippedReads}")
         appendLine()
         appendLine("## 差异（${report.diffs.size}）")
         report.diffs.forEach { diff ->

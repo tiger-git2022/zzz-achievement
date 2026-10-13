@@ -47,6 +47,8 @@ data class ScanReport(
     val observedCount: Int,
     val matchedCount: Int,
     val unmatched: List<ObservedRow>,
+    /** Unmatched reads dropped as the clipped head or tail of a local name (a row cut off at the list's edge). */
+    val clippedReads: Int = 0,
     /** Completed locally but not seen by this scan: missed by the scan, misread, or not in the game's list. */
     val localCompletedNotSeen: List<ScanCandidate>,
     val diffs: List<ScanDiff>,
@@ -75,6 +77,13 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
     }
     private val categories = prepared.map { it.category }.filter { it.isNotEmpty() }.distinct()
 
+    /** Name stems that several different achievements share (英雄之旅, 势如破竹, ...). */
+    private val sharedStems = prepared
+        .flatMap { candidate -> candidate.stems.map { it to candidate.candidate.linkKey } }
+        .groupBy({ it.first }, { it.second })
+        .filterValues { it.distinct().size > 1 }
+        .keys
+
     fun match(name: String, description: String, categoryHint: String?): ScanCandidate? {
         val stem = nameStem(normalizeText(name))
         if (stem.isEmpty()) return null
@@ -84,7 +93,16 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
             categories.maxByOrNull { similarity(it, hint) }?.takeIf { similarity(it, hint) >= CategoryThreshold }
         }
         val inCategory = category?.let { wanted -> prepared.filter { it.category == wanted } }.orEmpty()
-        return bestOf(inCategory, observed) ?: bestOf(prepared, observed)
+        bestOf(inCategory, observed)?.let { return it }
+        val anywhere = bestOf(prepared, observed) ?: return null
+        // Outside the row's own category a unique name is still safe (the local list may file it under an old
+        // category name), but one several achievements share would likely be another category's namesake.
+        if (category != null && normalizeText(anywhere.category) != category &&
+            nameVariants(anywhere.name).any { nameStem(normalizeText(it)) in sharedStems }
+        ) {
+            return null
+        }
+        return anywhere
     }
 
     private fun bestOf(pool: List<PreparedCandidate>, observed: ObservedText): ScanCandidate? {
@@ -180,20 +198,60 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
                 .map { it.value.trimStart('0').ifEmpty { "0" } }
                 .toList()
 
-        /** stardb keeps both protagonist variants ({M#..}{F#..}); the game shows one of them. */
+        /**
+         * The names the game can show for one achievement: stardb keeps both protagonist variants, either as
+         * {M#..}{F#..} or as two names joined by a slash (执事的晚安/晚安大小姐); the game shows one of them.
+         */
         fun nameVariants(name: String): List<String> {
-            if (!GenderVariantRegex.containsMatchIn(name)) return listOf(name)
-            return listOf(
-                name.replace(GenderVariantRegex) { it.groupValues[1] },
-                name.replace(GenderVariantRegex) { it.groupValues[2] },
-            )
+            val gendered = if (GenderVariantRegex.containsMatchIn(name)) {
+                listOf(
+                    name.replace(GenderVariantRegex) { it.groupValues[1] },
+                    name.replace(GenderVariantRegex) { it.groupValues[2] },
+                )
+            } else {
+                listOf(name)
+            }
+            return gendered.flatMap { variant ->
+                val parts = variant.split('/', '／').map { it.trim() }.filter { it.isNotEmpty() }
+                if (parts.size > 1) parts else listOf(variant)
+            }.distinct()
         }
 
+        /**
+         * Pairs of characters OCR swaps for each other often enough that a swap shouldn't cost a full edit
+         * (梦魇 read as 梦魔, 风起 as 凤起, 叱咤 as 比咤, 迷宫 as 迷官, 枯萎 as 枯藝/枯菱, ...).
+         */
+        private val LookAlikes: Set<Pair<Char, Char>> = listOf(
+            "魇魔", "风凤", "叱比", "宫官", "萎藝", "萎菱", "天夭", "借惜", "合台", "门们",
+        ).flatMap { pair -> listOf(pair[0] to pair[1], pair[1] to pair[0]) }.toSet()
+        private const val LookAlikeCost = 0.3
+
+        /** 1 for equal strings, falling with the edit distance; swapping look-alike characters costs less. */
         fun similarity(a: String, b: String): Double {
             if (a == b) return 1.0
             val longest = max(a.length, b.length)
             if (longest == 0) return 1.0
-            return 1.0 - levenshtein(a, b).toDouble() / longest
+            return 1.0 - weightedDistance(a, b) / longest
+        }
+
+        private fun weightedDistance(a: String, b: String): Double {
+            var previous = DoubleArray(b.length + 1) { it.toDouble() }
+            var current = DoubleArray(b.length + 1)
+            for (i in 1..a.length) {
+                current[0] = i.toDouble()
+                for (j in 1..b.length) {
+                    val cost = when {
+                        a[i - 1] == b[j - 1] -> 0.0
+                        (a[i - 1] to b[j - 1]) in LookAlikes -> LookAlikeCost
+                        else -> 1.0
+                    }
+                    current[j] = minOf(current[j - 1] + 1, previous[j] + 1, previous[j - 1] + cost)
+                }
+                val swap = previous
+                previous = current
+                current = swap
+            }
+            return previous[b.length]
         }
 
         fun levenshtein(a: String, b: String): Int {
@@ -251,11 +309,16 @@ object ScanReportBuilder {
             )
         }
 
+        // A row cut off at the list's edge can read as the tail (or head) of its name, e.g. 位主人的使命; it was
+        // read whole on a neighbouring page, so it isn't an achievement of its own.
+        val localNames = candidates.flatMap { nameVariants(it.name) }.map { AchievementMatcher.normalizeText(it) }.toSet()
+        val (clipped, unmatchedRows) = unmatched.partition { row -> isClippedName(AchievementMatcher.normalizeText(row.name), localNames) }
+
         val seenLinks = statusById.values.map { it.first.linkKey }.toSet()
         val completedSeen = statusById.values
             .filter { it.second.status is RowStatus.Completed }
             .map { it.first.linkKey }
-            .distinct().size + unmatched.count { it.status is RowStatus.Completed }
+            .distinct().size + unmatchedRows.count { it.status is RowStatus.Completed }
         val notSeen = candidates
             .filter { it.isCompleted && it.linkKey !in seenLinks }
             .distinctBy { it.linkKey }
@@ -266,13 +329,21 @@ object ScanReportBuilder {
             gameCompletedSeen = completedSeen,
             localCompletedCount = completedAchievements(candidates),
             localCompletedRecords = candidates.count { it.isCompleted },
-            observedCount = statusById.size + unmatched.size,
+            observedCount = statusById.size + unmatchedRows.size,
             matchedCount = statusById.size,
-            unmatched = unmatched.toList(),
+            unmatched = unmatchedRows,
+            clippedReads = clipped.size,
             localCompletedNotSeen = notSeen,
             diffs = diffs.sortedByDescending { it.markCompleted },
         )
     }
+
+    private fun nameVariants(name: String) = AchievementMatcher.nameVariants(name)
+
+    private fun isClippedName(name: String, localNames: Set<String>): Boolean =
+        name.length >= 3 && localNames.any { full ->
+            full.length > name.length && (full.endsWith(name) || full.startsWith(name))
+        }
 
     private fun sameUnmatchedRow(a: ObservedRow, b: ObservedRow): Boolean {
         if (a.tab != b.tab || AchievementMatcher.normalizeText(a.category) != AchievementMatcher.normalizeText(b.category)) return false

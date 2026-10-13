@@ -143,6 +143,18 @@ class GameScreenParserTest {
         assertEquals(3, screen.tabs.size)
     }
 
+    @Test
+    fun nearMatchInsideAMergedLineIsIgnored() {
+        // One wide box spanning two tabs, with only a near match: its midpoint is no tab's position.
+        val boxes = loadFixture("mlkit-story-frame2")
+            .filterNot { it.text == "故事" || it.text == "城市" } +
+            OcrBox("故市 x", 0.4875f, 0.0468f, 0.6400f, 0.0743f)
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(setOf("战术", "探索"), screen.tabs.keys)
+    }
+
     private fun loadFixture(name: String): List<OcrBox> {
         val stream = javaClass.classLoader!!.getResourceAsStream("ocr/$name.tsv")
         return stream.bufferedReader().readLines()

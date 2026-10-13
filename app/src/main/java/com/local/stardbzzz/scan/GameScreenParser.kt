@@ -89,13 +89,15 @@ object GameScreenParser {
         // Characters already taken by a tab, so one read can't stand for two tabs (故市 ≈ 故事 and 城市).
         val claimed = bar.map { BooleanArray(it.text.length) }
         // Exact names first; then, for any still missing, a read with one of its two characters wrong
-        // (ML Kit reads 探索 as 採索 on every frame of one phone).
+        // (ML Kit reads 探索 as 採索 on every frame of one phone). A near match only counts as a box of its
+        // own: inside a merged line its midpoint could fall between two tabs.
         for (exact in listOf(true, false)) {
             bar.forEachIndexed { boxIndex, box ->
                 // The tabs may come back as one merged line; place each name proportionally inside the box.
                 val text = box.text
                 TabNames.forEach { name ->
                     if (name in tabs) return@forEach
+                    if (!exact && text.length != name.length) return@forEach
                     val index = findName(text, name, claimed[boxIndex], exact)
                     if (index >= 0) {
                         name.indices.forEach { claimed[boxIndex][index + it] = true }

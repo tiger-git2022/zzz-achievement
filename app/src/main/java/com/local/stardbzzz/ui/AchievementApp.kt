@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -88,6 +89,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -124,6 +126,7 @@ import com.local.stardbzzz.data.local.SortMode
 import com.local.stardbzzz.data.local.SyncStatus
 import com.local.stardbzzz.data.repository.AchievementScreenState
 import com.local.stardbzzz.data.repository.AchievementUiModel
+import com.local.stardbzzz.data.update.AppUpdater
 import com.local.stardbzzz.R
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.Dispatchers
@@ -138,13 +141,14 @@ import java.net.URLEncoder
 import kotlin.math.abs
 
 @Composable
-fun AchievementApp(viewModel: AchievementViewModel) {
+fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater) {
     val state by viewModel.screenState.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
     var selectedAchievement by remember { mutableStateOf<AchievementUiModel?>(null) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
@@ -160,6 +164,13 @@ fun AchievementApp(viewModel: AchievementViewModel) {
 
     BackHandler(enabled = drawerState.isOpen) {
         scope.launch { drawerState.close() }
+    }
+
+    UpdateDialogs(updater)
+
+    if (showSettings) {
+        SettingsScreen(updater = updater, onBack = { showSettings = false })
+        return
     }
 
     ModalNavigationDrawer(
@@ -186,6 +197,7 @@ fun AchievementApp(viewModel: AchievementViewModel) {
                 isRefreshing = status.isRefreshing,
                 onOpenCategories = { scope.launch { drawerState.open() } },
                 onRefresh = viewModel::refresh,
+                onOpenSettings = { showSettings = true },
                 onLogout = {
                     CookieManager.getInstance().removeAllCookies(null)
                     CookieManager.getInstance().flush()
@@ -249,6 +261,7 @@ private fun AchievementTopBar(
     isRefreshing: Boolean,
     onOpenCategories: () -> Unit,
     onRefresh: () -> Unit,
+    onOpenSettings: () -> Unit,
     onLogout: () -> Unit,
 ) {
     TopAppBar(
@@ -285,6 +298,9 @@ private fun AchievementTopBar(
                 IconButton(onClick = onRefresh) {
                     Icon(Icons.Default.Refresh, contentDescription = "刷新")
                 }
+            }
+            IconButton(onClick = onOpenSettings) {
+                Icon(Icons.Default.Settings, contentDescription = "设置")
             }
             IconButton(onClick = onLogout) {
                 Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "退出登录")

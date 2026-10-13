@@ -8,6 +8,7 @@ import com.local.stardbzzz.data.network.RngAchievementIconClient
 import com.local.stardbzzz.data.network.StardbNetwork
 import com.local.stardbzzz.data.network.WebViewAchievementWriteSyncClient
 import com.local.stardbzzz.data.repository.AchievementRepository
+import com.local.stardbzzz.data.update.AppUpdater
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
@@ -26,4 +27,6 @@ class AppContainer(context: Context) {
         writeSyncClient = writeSyncClient,
         iconClient = iconClient,
     )
+
+    val updater = AppUpdater(appContext)
 }

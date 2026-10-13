@@ -185,7 +185,10 @@ class ScanCoordinator(
         if (capture != null && input != null && job?.isActive != true) _state.value = ScanState.Ready
     }
 
-    /** OCR is accurate well below full resolution and much faster there. */
+    /**
+     * Only very large frames are shrunk. On a 3168px-wide phone, shrinking to 1600px left achievement names
+     * about 20px tall and ML Kit misread characters (叩 → D/号) on every other frame.
+     */
     private fun scaleForOcr(frame: Bitmap): Bitmap {
         if (frame.width <= OcrMaxWidth) return frame
         val height = (frame.height * OcrMaxWidth.toFloat() / frame.width).toInt()
@@ -220,7 +223,7 @@ class ScanCoordinator(
 
     private companion object {
         const val KeySaveDebugFrames = "save_debug_frames"
-        const val OcrMaxWidth = 1600
+        const val OcrMaxWidth = 3200
         const val MaxDebugFrames = 1500
     }
 }

@@ -3,6 +3,7 @@ package com.local.stardbzzz.scan
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
@@ -46,6 +47,12 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+
+    /** The panel is laid out for the screen size at render time; rotating (app in portrait, game in landscape) moves it. */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        overlay?.relayout()
+    }
 
     override fun onInterrupt() = Unit
 
@@ -160,6 +167,12 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
                 }
             }
             show()
+        }
+
+        fun relayout() {
+            // A spot dragged to in one orientation can be off-screen or over the scan area in the other.
+            dragged = null
+            if (attached) show()
         }
 
         fun remove() {

@@ -53,6 +53,7 @@ class AchievementPageScanner(
     private var pages = 0
     private var currentTab: String? = null
     private var currentCategory: String? = null
+    private var gameCompletedCount: Int? = null
 
     suspend fun scan(): ScanCapture {
         val first = readPage()
@@ -66,7 +67,7 @@ class AchievementPageScanner(
             delay(timings.afterTapMillis)
             scanTab(tab)
         }
-        return ScanCapture(rows.toList(), first.completedCount)
+        return ScanCapture(rows.toList(), gameCompletedCount)
     }
 
     /** A page counts as the achievement page with 3 of 4 tabs; re-read so a single OCR miss can't drop a whole tab. */
@@ -143,6 +144,7 @@ class AchievementPageScanner(
         repeat(MaxPagesPerCategory) {
             val page = readPage()
             onPage(page)
+            report()
             val names = contentOf(page)
             if (previousNames?.let { sameContent(it, names) } == true) {
                 if (++unchangedReads >= StableReads) return
@@ -160,7 +162,11 @@ class AchievementPageScanner(
         repeat(PageReadAttempts) { attempt ->
             val page = GameScreenParser.parse(reader.read())
             pages++
-            if (page.isAchievementPage) return page
+            if (page.isAchievementPage) {
+                // Any one frame can have the counter misread or briefly covered; keep the first clean read.
+                if (gameCompletedCount == null) gameCompletedCount = page.completedCount
+                return page
+            }
             if (attempt < PageReadAttempts - 1) delay(timings.afterSwipeMillis)
         }
         throw NotOnAchievementPageException()
@@ -170,11 +176,16 @@ class AchievementPageScanner(
         onProgress(ScanProgress(currentTab, currentCategory, pages, seenNames.size))
     }
 
-    /** Labels like 代理人秘闻 / 代理人信赖 differ by few characters, so only exact or partial (clipped) reads count. */
+    /**
+     * Labels like 代理人秘闻 / 代理人信赖 differ by two characters, so beyond exact or partial (clipped) reads
+     * only a single misread character counts (代理人秘圓), and never one that changes a number.
+     */
     private fun isSameLabel(a: String, b: String): Boolean {
         val x = AchievementMatcher.normalizeText(a)
         val y = AchievementMatcher.normalizeText(b)
-        return x == y || (minOf(x.length, y.length) >= 2 && (x.contains(y) || y.contains(x)))
+        if (x == y || (minOf(x.length, y.length) >= 2 && (x.contains(y) || y.contains(x)))) return true
+        return minOf(x.length, y.length) >= 3 && AchievementMatcher.levenshtein(x, y) <= 1 &&
+            x.filter { it.isDigit() } == y.filter { it.isDigit() }
     }
 
     companion object {

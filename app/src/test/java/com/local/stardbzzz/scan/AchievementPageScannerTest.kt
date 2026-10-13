@@ -80,6 +80,37 @@ class AchievementPageScannerTest {
     }
 
     @Test
+    fun misreadSidebarLabelIsNotVisitedTwice() = runBlocking {
+        // 代理人秘闻 was read as 代理人秘圓 on some frames; that must not count as a new category.
+        val game = FakeGame(
+            GameScreenParser.TabNames.associateWith { tab ->
+                listOf("法厄同纪事", "代理人秘闻", "独家视界", "代理人信赖", "际会之时", "绳网热议", "空洞调查", "新艾利都")
+                    .map { "$tab$it" to rows("$tab$it", 4) }
+            },
+            jitterSidebar = true,
+        )
+
+        val capture = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0)).scan()
+
+        assertEquals(4 * 8, game.categoryTaps)
+        assertEquals(4 * 8 * 4, capture.rows.map { it.name }.toSet().size)
+    }
+
+    @Test
+    fun keepsTheFirstCleanCompletedCount() = runBlocking {
+        // The first frame can have the counter covered (the overlay was still laid out for portrait).
+        val game = FakeGame(GameScreenParser.TabNames.associateWith { listOf("${it}分类" to rows(it, 3)) })
+        var reads = 0
+        val coveredFirst = ScreenReader {
+            game.read().let { boxes -> if (reads++ == 0) boxes.filterNot { it.text == "完成数" } else boxes }
+        }
+
+        val capture = AchievementPageScanner(coveredFirst, game, ScanTimings(0, 0, 0, 0)).scan()
+
+        assertEquals(42, capture.gameCompletedCount)
+    }
+
+    @Test
     fun sameContentToleratesMisreadsButNotScrolling() {
         val page = listOf("叩响命运之门", "「英雄」", "从零开始", "绳网新人", "空洞调查员")
         assertTrue(AchievementPageScanner.sameContent(page, listOf("D响命运之门", "『英雄｣", "从雪开始", "绳网新人", "空洞调查员")))
@@ -119,8 +150,12 @@ class AchievementPageScannerTest {
         private val dropSidebarAfterSidebarSwipe: Boolean = false,
         /** Every other read garbles one character of each row name, like real OCR of an unchanged frame. */
         private val jitterRows: Boolean = false,
+        /** Every other read garbles the last character of each sidebar label. */
+        private val jitterSidebar: Boolean = false,
     ) : ScreenReader, GestureInput {
         var swipes = 0
+            private set
+        var categoryTaps = 0
             private set
         private var reads = 0
 
@@ -171,7 +206,8 @@ class AchievementPageScannerTest {
             hideSidebarOnNextRead = false
             if (showSidebar) categories.drop(sidebarOffset).take(VisibleLabels).forEachIndexed { index, (name, _) ->
                 val y = 0.35f + index * 0.0845f
-                boxes += OcrBox(name, 0.11f, y - 0.015f, 0.18f, y + 0.015f)
+                val label = if (jitterSidebar && reads % 2 == 0) name.dropLast(1) + "圓" else name
+                boxes += OcrBox(label, 0.11f, y - 0.015f, 0.18f, y + 0.015f)
             }
             rowsInCategory.drop(listOffset).take(VisibleRows).forEachIndexed { index, name ->
                 val y = 0.30f + index * 0.136f
@@ -187,6 +223,7 @@ class AchievementPageScannerTest {
                 tab = GameScreenParser.TabNames[((point.x - 0.50f) / 0.125f).toInt()]
                 category = 0
             } else if (point.x < 0.25f) {
+                categoryTaps++
                 category = sidebarOffset + ((point.y - 0.35f + 0.04f) / 0.0845f).toInt()
             }
         }

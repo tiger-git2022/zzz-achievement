@@ -147,9 +147,10 @@ class AppUpdater(context: Context) {
     }
 
     fun cancelDownload() {
+        // Cancel the job first so the IOException from the interrupted call is seen as a cancellation.
         // Job.cancel() alone can't interrupt a blocking OkHttp read; cancelling the call does.
-        downloadCall?.cancel()
         downloadJob?.cancel()
+        downloadCall?.cancel()
         downloadJob = null
         _state.value = UpdateState.Idle
     }

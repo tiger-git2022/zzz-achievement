@@ -104,15 +104,16 @@ jobs:
           name: apk
           path: dist
 
+      # Notes are Chinese first, then English: commit / PR titles are written as "中文 / English".
       - name: Write release notes
         run: |
           previous=$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>/dev/null || true)
           if [ -n "$previous" ]; then
             range="$previous..HEAD"
-            echo "## 更新内容（自 $previous 起）" > notes.md
+            echo "## 更新内容（自 $previous 起）/ What's changed since $previous" > notes.md
           else
             range="HEAD"
-            echo "## 更新内容" > notes.md
+            echo "## 更新内容 / What's changed" > notes.md
           fi
           echo >> notes.md
           git log --no-merges --max-count=50 --pretty='- %s (%h)' $range >> notes.md

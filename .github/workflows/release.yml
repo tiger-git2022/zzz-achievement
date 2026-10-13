@@ -33,25 +33,29 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Signing secrets are only exposed to release builds of main, never to PR-controlled code.
       - name: Decode signing keystore
+        if: env.IS_RELEASE == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
-            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-          elif [ "$IS_RELEASE" = "true" ]; then
+          if [ -z "$KEYSTORE_BASE64" ]; then
             echo "::error::KEYSTORE_BASE64 secret is missing; refusing to publish a debug-signed release."
             exit 1
-          else
-            echo "No keystore available; building with the debug key."
           fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
-      - name: Build release APK
+      - name: Build release APK (release signing)
+        if: env.IS_RELEASE == 'true'
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew --no-daemon --stacktrace assembleRelease
+
+      - name: Build release APK (debug signing)
+        if: env.IS_RELEASE != 'true'
         run: ./gradlew --no-daemon --stacktrace assembleRelease
 
       - name: Collect and verify APK

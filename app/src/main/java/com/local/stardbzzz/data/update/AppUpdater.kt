@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -60,6 +61,7 @@ class AppUpdater(context: Context) {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
     private var downloadJob: Job? = null
+    @Volatile private var downloadCall: Call? = null
 
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
@@ -75,10 +77,11 @@ class AppUpdater(context: Context) {
         val now = System.currentTimeMillis()
         if (now >= lastCheck && now - lastCheck < AutoCheckIntervalMillis) return
         if (_state.value != UpdateState.Idle) return
+        // Count failed attempts too, so an offline device doesn't retry on every launch.
+        prefs.edit().putLong(KeyLastCheck, now).apply()
 
         scope.launch {
             val release = runCatching { fetchLatestRelease() }.getOrNull() ?: return@launch
-            prefs.edit().putLong(KeyLastCheck, now).apply()
             if (release.buildNumber > BuildConfig.BUILD_NUMBER &&
                 release.buildNumber != prefs.getInt(KeyIgnoredBuild, -1)
             ) {
@@ -129,6 +132,7 @@ class AppUpdater(context: Context) {
             } catch (failure: CancellationException) {
                 throw failure
             } catch (failure: Exception) {
+                ensureActive() // cancelDownload() surfaces as an IOException from the cancelled call; stay quiet
                 _state.value = UpdateState.Idle
                 _messages.tryEmit("下载失败：${failure.message ?: failure.javaClass.simpleName}")
             }
@@ -136,6 +140,8 @@ class AppUpdater(context: Context) {
     }
 
     fun cancelDownload() {
+        // Job.cancel() alone can't interrupt a blocking OkHttp read; cancelling the call does.
+        downloadCall?.cancel()
         downloadJob?.cancel()
         downloadJob = null
         _state.value = UpdateState.Idle
@@ -198,13 +204,15 @@ class AppUpdater(context: Context) {
         val dir = File(appContext.cacheDir, "updates").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
         val target = File(dir, "zzz-achievement-${release.tagName}.apk")
-        val partial = File(dir, "${target.name}.part")
+        // Unique per attempt so a cancelled download's cleanup can't delete a newer one's file.
+        val partial = File.createTempFile("download-", ".part", dir)
         val sha256 = MessageDigest.getInstance("SHA-256")
         var downloaded = 0L
+        val call = client.newCall(Request.Builder().url(release.apkUrl).build())
+        downloadCall = call
 
         try {
-            val request = Request.Builder().url(release.apkUrl).build()
-            client.newCall(request).execute().use { response ->
+            call.execute().use { response ->
                 if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
                 val body = response.body ?: throw IOException("响应为空")
                 val total = body.contentLength().takeIf { it > 0 } ?: release.apkSize
@@ -252,6 +260,8 @@ class AppUpdater(context: Context) {
         } catch (failure: Throwable) {
             partial.delete()
             throw failure
+        } finally {
+            if (downloadCall === call) downloadCall = null
         }
     }
 

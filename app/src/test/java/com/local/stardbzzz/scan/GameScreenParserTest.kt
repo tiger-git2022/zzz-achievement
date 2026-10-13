@@ -120,6 +120,17 @@ class GameScreenParserTest {
         assertTrue(AchievementPageScanner.sameContent(first.sidebar.map { it.text }, second.sidebar.map { it.text }))
     }
 
+    @Test
+    fun tabReadWithOneWrongCharacterStillCounts() {
+        // ML Kit at full resolution read 探索 as 採索 on every frame of the second phone run.
+        val boxes = loadFixture("mlkit-story-frame2").map { if (it.text == "探索") it.copy(text = "採索") else it }
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(GameScreenParser.TabNames.toSet(), screen.tabs.keys)
+        assertEquals(0.88f, screen.tabs.getValue("探索").x, 0.01f)
+    }
+
     private fun loadFixture(name: String): List<OcrBox> {
         val stream = javaClass.classLoader!!.getResourceAsStream("ocr/$name.tsv")
         return stream.bufferedReader().readLines()

@@ -74,6 +74,23 @@ class ScanReportTest {
         assertEquals("进行中 7/12", report.diffs[1].gameStatus)
     }
 
+    @Test
+    fun keepsSameNameAchievementsWithDifferentDescriptions() {
+        val observed = listOf(
+            ObservedRow("探索", "空洞探索指南", "公平竞争制度", "救出所有走失的邦布商人。", RowStatus.Completed("2026-06-25")),
+            ObservedRow("探索", "空洞探索指南", "公平竞争制度", "在其他关卡中完成挑战。", RowStatus.Completed("2026-06-26")),
+        )
+        val sameCategory = listOf(
+            candidate("5", "公平竞争制度", "救出所有走失的邦布商人。", "空洞探索指南"),
+            candidate("6", "公平竞争制度", "在其他关卡中完成挑战。", "空洞探索指南"),
+        )
+
+        val report = ScanReportBuilder.build(observed, sameCategory, gameCompletedCount = null)
+
+        assertEquals(listOf("5", "6"), report.diffs.map { it.id })
+        assertEquals(2, report.observedCount)
+    }
+
     private fun candidate(id: String, name: String, description: String, category: String, completed: Boolean = false) =
         ScanCandidate(id, name, description, category, completed)
 }

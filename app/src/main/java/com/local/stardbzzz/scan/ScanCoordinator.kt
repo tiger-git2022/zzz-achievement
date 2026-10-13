@@ -167,10 +167,11 @@ class ScanCoordinator(
     suspend fun apply(diffs: List<ScanDiff>) {
         repository.applyScannedCompletion(diffs.associate { it.id to it.markCompleted })
         val applied = diffs.map { it.id }.toSet()
-        val completedDelta = diffs.count { it.markCompleted } - diffs.count { !it.markCompleted }
+        // One diff can update several linked records, so recount instead of adjusting by the diff count.
+        val localCompleted = repository.scanCandidates().count { it.isCompleted }
         val updated = _lastReport.value?.let { report ->
             report.copy(
-                localCompletedCount = report.localCompletedCount + completedDelta,
+                localCompletedCount = localCompleted,
                 diffs = report.diffs.filterNot { it.id in applied },
             )
         } ?: return

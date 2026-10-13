@@ -143,17 +143,15 @@ object ScanReportBuilder {
         gameCompletedCount: Int?,
     ): ScanReport {
         val matcher = AchievementMatcher(candidates)
-        // The same row is usually captured on two consecutive pages; keep one, preferring a completed reading.
-        val unique = observed
-            .groupBy { Triple(it.tab, AchievementMatcher.normalizeText(it.category), AchievementMatcher.normalizeText(it.name)) }
-            .map { (_, rows) -> rows.firstOrNull { it.status is RowStatus.Completed } ?: rows.first() }
-
-        val unmatched = mutableListOf<ObservedRow>()
+        // The same row is usually captured on two consecutive pages. Match every reading first and merge by
+        // the matched achievement, so same-name achievements told apart by description stay separate.
+        val unmatched = linkedMapOf<Triple<String, String, String>, ObservedRow>()
         val statusById = linkedMapOf<String, Pair<ScanCandidate, ObservedRow>>()
-        unique.forEach { row ->
+        observed.forEach { row ->
             val candidate = matcher.match(row.name, row.description, row.category)
             if (candidate == null) {
-                unmatched += row
+                val key = Triple(row.tab, AchievementMatcher.normalizeText(row.category), AchievementMatcher.normalizeText(row.name))
+                unmatched.putIfAbsent(key, row)
                 return@forEach
             }
             val existing = statusById[candidate.id]
@@ -177,9 +175,9 @@ object ScanReportBuilder {
         return ScanReport(
             gameCompletedCount = gameCompletedCount,
             localCompletedCount = candidates.count { it.isCompleted },
-            observedCount = unique.size,
+            observedCount = statusById.size + unmatched.size,
             matchedCount = statusById.size,
-            unmatched = unmatched,
+            unmatched = unmatched.values.toList(),
             diffs = diffs.sortedByDescending { it.markCompleted },
         )
     }

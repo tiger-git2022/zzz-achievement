@@ -16,6 +16,7 @@ import com.local.stardbzzz.scan.ScanCandidate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.ResponseBody
@@ -33,6 +34,14 @@ data class AchievementUiModel(
     val isPinned: Boolean,
     val isCompleted: Boolean,
     val syncStatus: SyncStatus,
+)
+
+data class AchievementListInfo(
+    val total: Int,
+    val completed: Int,
+    val latestVersion: String?,
+    val refreshedAtEpochMillis: Long,
+    val completedViaGroup: Int,
 )
 
 data class AchievementScreenState(
@@ -183,6 +192,7 @@ class AchievementRepository(
             }
             dao.reconcileRemote(remote, tracker.map { it.id })
             filterPreferences.updateLastSyncTime(now)
+            filterPreferences.updateCompletedViaGroup(tracker.count { it.completedViaGroup })
             syncPendingLocked()
         }
     }
@@ -204,6 +214,21 @@ class AchievementRepository(
         remoteOperationMutex.withLock {
             syncCurrentLocked(id)
         }
+    }
+
+    /** What the scan compares against: how big and how fresh the local achievement list is. */
+    suspend fun achievementListInfo(): AchievementListInfo {
+        val all = dao.allSnapshot()
+        val preferences = filterPreferences.state.first()
+        return AchievementListInfo(
+            total = all.size,
+            completed = all.count { it.isCompleted },
+            latestVersion = all.map { it.version }
+                .filter { it.isNotBlank() }
+                .maxByOrNull { it.removePrefix("V").removePrefix("v").toFloatOrNull() ?: 0f },
+            refreshedAtEpochMillis = preferences.lastSyncEpochMillis,
+            completedViaGroup = preferences.completedViaGroup,
+        )
     }
 
     suspend fun scanCandidates(): List<ScanCandidate> =

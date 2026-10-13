@@ -21,6 +21,8 @@ data class FilterState(
     val sortMode: SortMode = SortMode.Category,
     val firstVisibleItemIndex: Int = 0,
     val lastSyncEpochMillis: Long = 0L,
+    /** From the last refresh: achievements shown completed only because another member of their stardb group is. */
+    val completedViaGroup: Int = 0,
 )
 
 enum class CompletionFilter {
@@ -48,6 +50,7 @@ class FilterPreferences(private val context: Context) {
             sortMode = enumPreference(preferences, Keys.Sort, SortMode.Category),
             firstVisibleItemIndex = preferences[Keys.FirstVisibleItemIndex] ?: 0,
             lastSyncEpochMillis = preferences[Keys.LastSyncEpochMillis] ?: 0L,
+            completedViaGroup = preferences[Keys.CompletedViaGroup] ?: 0,
         )
     }
 
@@ -71,6 +74,7 @@ class FilterPreferences(private val context: Context) {
     suspend fun updateSortMode(value: SortMode) = update(Keys.Sort, value.name)
     suspend fun updateFirstVisibleItemIndex(value: Int) = context.filterDataStore.edit { it[Keys.FirstVisibleItemIndex] = value }
     suspend fun updateLastSyncTime(value: Long) = context.filterDataStore.edit { it[Keys.LastSyncEpochMillis] = value }
+    suspend fun updateCompletedViaGroup(value: Int) = context.filterDataStore.edit { it[Keys.CompletedViaGroup] = value }
 
     private suspend fun update(key: Preferences.Key<String>, value: String) {
         context.filterDataStore.edit { it[key] = value }
@@ -91,5 +95,6 @@ class FilterPreferences(private val context: Context) {
         val Sort = stringPreferencesKey("sort")
         val FirstVisibleItemIndex = intPreferencesKey("first_visible_item_index")
         val LastSyncEpochMillis = longPreferencesKey("last_sync_epoch_millis")
+        val CompletedViaGroup = intPreferencesKey("completed_via_group")
     }
 }

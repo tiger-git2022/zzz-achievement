@@ -2,6 +2,7 @@ package com.local.stardbzzz.scan
 
 import android.content.Context
 import android.graphics.Bitmap
+import com.local.stardbzzz.data.repository.AchievementListInfo
 import com.local.stardbzzz.data.repository.AchievementRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -113,6 +114,7 @@ class ScanCoordinator(
                 delay(OverlaySettleMillis)
                 val debug = if (_saveDebugFrames.value) DebugFrameWriter(debugDirectory) else null
                 debug?.writeCandidates(candidates)
+                val listInfo = repository.achievementListInfo()
                 var progress = ScanProgress(null, null, 0, 0)
                 val reader = ScreenReader {
                     val frame = screen.capture()
@@ -128,7 +130,7 @@ class ScanCoordinator(
                     _state.value = ScanState.Running(update)
                 }.scan()
                 val report = ScanReportBuilder.build(result.rows, candidates, result.gameCompletedCount)
-                debug?.writeReport(report)
+                debug?.writeReport(report, listInfo)
                 _lastReport.value = report
                 _state.value = ScanState.Finished(report)
             } catch (cancelled: CancellationException) {
@@ -156,6 +158,13 @@ class ScanCoordinator(
         job?.cancel()
         ScreenCaptureService.stop(appContext)
         _state.value = ScanState.Idle
+    }
+
+    suspend fun achievementListInfo(): AchievementListInfo = repository.achievementListInfo()
+
+    /** Re-downloads the achievement list from stardb, so newly added achievements can be matched. */
+    suspend fun refreshAchievementList() {
+        repository.refreshAchievements()
     }
 
     fun requestOpenScanScreen() {
@@ -237,9 +246,14 @@ class ScanCoordinator(
             runCatching { File(dir, ScanDebugFiles.Candidates).writeText(ScanDebugFiles.candidatesTsv(candidates)) }
         }
 
-        fun writeReport(report: ScanReport) {
+        fun writeReport(report: ScanReport, list: AchievementListInfo) {
             val dir = directory ?: return
-            runCatching { File(dir, ScanDebugFiles.Report).writeText(ScanDebugFiles.reportText(report)) }
+            val listHeader = buildString {
+                appendLine("本地成就列表\t${list.total} 条，最新版本 ${list.latestVersion ?: "未知"}")
+                appendLine("列表更新时间\t${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(Date(list.refreshedAtEpochMillis))}")
+                appendLine("stardb 同组连带标记已完成\t${list.completedViaGroup}")
+            }
+            runCatching { File(dir, ScanDebugFiles.Report).writeText(listHeader + ScanDebugFiles.reportText(report)) }
         }
     }
 

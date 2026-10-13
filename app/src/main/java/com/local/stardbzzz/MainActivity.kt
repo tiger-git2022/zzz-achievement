@@ -15,14 +15,18 @@ import com.local.stardbzzz.ui.theme.ZZZAchievementTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val repository = (application as ZZZAchievementApp).container.repository
+        val container = (application as ZZZAchievementApp).container
+        val repository = container.repository
+        if (savedInstanceState == null) {
+            container.updater.checkAutomatically()
+        }
         setContent {
             ZZZAchievementTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val viewModel: AchievementViewModel = viewModel(
                         factory = AchievementViewModelFactory(repository),
                     )
-                    AchievementApp(viewModel = viewModel)
+                    AchievementApp(viewModel = viewModel, updater = container.updater)
                 }
             }
         }

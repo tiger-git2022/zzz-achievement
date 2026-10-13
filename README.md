@@ -13,6 +13,14 @@
 - 成就详情弹窗。
 - 勾选/取消勾选先本地更新，接口失败时保留待同步状态，后续刷新会重试。
 
+## 自动构建与更新
+
+- `.github/workflows/release.yml`：每次推送 `main` 或手动触发（Actions → Build & Release → Run workflow）时编译签名的 release APK，并发布到 Releases，tag 为 `v1.1.<构建号>`（构建号 = `GITHUB_RUN_NUMBER`），更新说明为与上一个 tag 之间的 commit 列表。PR 只编译，APK 作为 Actions artifact 上传。
+- 签名读取仓库 Secrets：`KEYSTORE_BASE64`、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`。`app/build.gradle.kts` 从环境变量 `KEYSTORE_FILE` 等读取，本地没有这些变量时 release 构建使用 debug 签名。
+- 版本号：CI 构建 `versionCode = 100 + 构建号`，`versionName = 1.1.<构建号>`；本地构建保持 `versionCode = 2`、`versionName = 1.1`、构建号 0。
+- App 启动时每天最多自动检查一次 GitHub 最新 Release（失败静默），设置页可手动“检查更新”。下载后通过 FileProvider 调起系统安装；首次需要允许“安装未知应用”。
+- 只有使用同一签名证书的 APK 才能覆盖安装；本地 debug 签名的版本需要先卸载再安装 Release 版本。
+
 ## 已从 HAR 确认的接口
 
 - 登录：`POST https://stardb.gg/zh-cn/login`

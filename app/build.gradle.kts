@@ -5,6 +5,16 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+// CI passes BUILD_NUMBER (GITHUB_RUN_NUMBER); local builds fall back to 0.
+val buildNumber = System.getenv("BUILD_NUMBER")?.toIntOrNull() ?: 0
+val baseVersionName = "1.1"
+
+// Release signing comes from the environment (see .github/workflows/release.yml).
+// Without it, release builds are signed with the debug key so local builds keep working.
+val releaseKeystoreFile = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() }?.let(::file)
+val hasReleaseSigning = releaseKeystoreFile?.isFile == true &&
+    listOf("KEYSTORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD").all { !System.getenv(it).isNullOrEmpty() }
+
 android {
     namespace = "com.local.stardbzzz"
     compileSdk = 35
@@ -13,8 +23,34 @@ android {
         applicationId = "com.local.stardbzzz"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        // Offset keeps CI builds above the hand-set versionCode 2 used before CI existed.
+        versionCode = if (buildNumber > 0) 100 + buildNumber else 2
+        versionName = if (buildNumber > 0) "$baseVersionName.$buildNumber" else baseVersionName
+        buildConfigField("int", "BUILD_NUMBER", buildNumber.toString())
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = releaseKeystoreFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // R8 stays off; turning it on needs keep rules verified at runtime for the
+            // WebView @JavascriptInterface bridge, Retrofit interfaces and Room.
+            isMinifyEnabled = false
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
     }
 
     buildFeatures {

@@ -102,14 +102,21 @@ object GameScreenParser {
                 if (index >= 0) tabs[name] = claim(box, claimed[boxIndex], name, index)
             }
         }
-        bar.forEachIndexed { boxIndex, box ->
-            // A read one character off two missing names (故市: 故事 or 城市?) can't be placed; skip it.
-            val candidates = TabNames.filter { name ->
-                name !in tabs && box.text.length == name.length &&
-                    findName(box.text, name, claimed[boxIndex], exact = false) == 0
+        // A read one character off two missing names (故市: 故事 or 城市?) can't be placed yet, but may be once
+        // another box settles one of them (城区 → 城市), so repeat until nothing changes.
+        do {
+            var assigned = false
+            bar.forEachIndexed { boxIndex, box ->
+                val candidates = TabNames.filter { name ->
+                    name !in tabs && box.text.length == name.length &&
+                        findName(box.text, name, claimed[boxIndex], exact = false) == 0
+                }
+                candidates.singleOrNull()?.let { name ->
+                    tabs[name] = claim(box, claimed[boxIndex], name, 0)
+                    assigned = true
+                }
             }
-            candidates.singleOrNull()?.let { name -> tabs[name] = claim(box, claimed[boxIndex], name, 0) }
-        }
+        } while (assigned)
         return tabs
     }
 

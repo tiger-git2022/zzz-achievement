@@ -144,6 +144,25 @@ class GameScreenParserTest {
     }
 
     @Test
+    fun aSkippedNearMatchIsSettledOnceAnotherTabIs() {
+        // 故市 fits 故事 or 城市 at first; once 城区 settles 城市, 故市 can only be 故事.
+        val frame = loadFixture("mlkit-story-frame2")
+        val story = frame.single { it.text == "故事" }
+        val boxes = frame.map {
+            when (it.text) {
+                "故事" -> it.copy(text = "故市")
+                "城市" -> it.copy(text = "城区")
+                else -> it
+            }
+        }
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(GameScreenParser.TabNames.toSet(), screen.tabs.keys)
+        assertEquals(story.centerX, screen.tabs.getValue("故事").x, 0.001f)
+    }
+
+    @Test
     fun aNearMatchForOneMissingTabCounts() {
         // With 城市 read correctly, 故市 can only be 故事.
         val frame = loadFixture("mlkit-story-frame2")

@@ -10,21 +10,23 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # Read by app/build.gradle.kts: versionCode = 100 + BUILD_NUMBER, versionName = 1.1.BUILD_NUMBER.
+  BUILD_NUMBER: ${{ github.run_number }}
+  VERSION_NAME: 1.1.${{ github.run_number }}
+  IS_RELEASE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+
 jobs:
+  # Runs repository code (Gradle), so it only gets a read-only token.
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-    env:
-      # Read by app/build.gradle.kts: versionCode = 100 + BUILD_NUMBER, versionName = 1.1.BUILD_NUMBER.
-      BUILD_NUMBER: ${{ github.run_number }}
-      VERSION_NAME: 1.1.${{ github.run_number }}
-      IS_RELEASE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history + tags for the release notes
+          persist-credentials: false
 
       - uses: actions/setup-java@v4
         with:
@@ -79,12 +81,30 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: zzz-achievement-v${{ env.VERSION_NAME }}
+          name: apk
           path: dist/*.apk
           retention-days: 14
 
+  # Holds the write token; never runs Gradle or other repository code.
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags for the release notes
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+          path: dist
+
       - name: Write release notes
-        if: env.IS_RELEASE == 'true'
         run: |
           previous=$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>/dev/null || true)
           if [ -n "$previous" ]; then
@@ -99,11 +119,11 @@ jobs:
           cat notes.md
 
       - name: Publish GitHub release
-        if: env.IS_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "v${VERSION_NAME}" dist/*.apk \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "v${VERSION_NAME}" \
             --notes-file notes.md \

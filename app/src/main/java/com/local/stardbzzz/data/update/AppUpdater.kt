@@ -128,7 +128,14 @@ class AppUpdater(context: Context) {
         downloadJob = scope.launch {
             try {
                 val apk = downloadApk(release)
-                _state.value = UpdateState.ReadyToInstall(release, apk)
+                // Only advance if the user hasn't cancelled in the meantime.
+                _state.update { current ->
+                    if (current is UpdateState.Downloading && current.release == release) {
+                        UpdateState.ReadyToInstall(release, apk)
+                    } else {
+                        current
+                    }
+                }
             } catch (failure: CancellationException) {
                 throw failure
             } catch (failure: Exception) {
@@ -255,6 +262,7 @@ class AppUpdater(context: Context) {
             if (packageName != appContext.packageName) {
                 throw IOException("安装包无效")
             }
+            ensureActive()
             if (!partial.renameTo(target)) throw IOException("无法保存安装包")
             target
         } catch (failure: Throwable) {

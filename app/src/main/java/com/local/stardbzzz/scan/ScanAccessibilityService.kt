@@ -3,6 +3,7 @@ package com.local.stardbzzz.scan
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
@@ -10,6 +11,7 @@ import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -45,6 +47,12 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+
+    /** The panel is laid out for the screen size at render time; rotating (app in portrait, game in landscape) moves it. */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        overlay?.relayout()
+    }
 
     override fun onInterrupt() = Unit
 
@@ -101,6 +109,8 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
     /**
      * Small panel at the top of the screen, between the game's "完成数" counter and the tab bar,
      * so it never covers anything the scan reads or touches. Its text avoids tab and category names.
+     * Outside a run it can be dragged out of the way (e.g. off the game's menu button); a run always
+     * puts it back at that spot, since the panel shows up in the captured frames.
      */
     private inner class ScanOverlay(service: AccessibilityService) {
         private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -121,17 +131,22 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
             addView(status)
             addView(primary)
             addView(secondary)
+            setOnTouchListener(DragListener())
         }
         private var attached = false
+        private var running = false
+        private var dragged: Pair<Int, Int>? = null
+        private var params: WindowManager.LayoutParams? = null
 
         fun render(state: ScanState) {
+            running = state is ScanState.Running
             when (state) {
                 ScanState.Idle -> {
                     remove()
                     return
                 }
                 ScanState.Ready -> {
-                    status.text = "成就扫描：打开成就页后点开始"
+                    status.text = "打开成就页后点开始，可拖动"
                     primary.bind("开始") { coordinator.start() }
                     secondary.bind("退出") { coordinator.endSession() }
                 }
@@ -154,6 +169,12 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
             show()
         }
 
+        fun relayout() {
+            // A spot dragged to in one orientation can be off-screen or over the scan area in the other.
+            dragged = null
+            if (attached) show()
+        }
+
         fun remove() {
             if (attached) {
                 runCatching { windowManager.removeView(root) }
@@ -172,14 +193,47 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
                 PixelFormat.TRANSLUCENT,
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
-                x = (width * 0.155f).toInt()
-                y = dp(4)
+                val position = dragged.takeUnless { running } ?: ((width * 0.155f).toInt() to dp(4))
+                x = position.first
+                y = position.second
             }
+            this.params = params
             if (attached) {
                 windowManager.updateViewLayout(root, params)
             } else {
                 windowManager.addView(root, params)
                 attached = true
+            }
+        }
+
+        /** Moves the panel with the finger; touches on its buttons still go to the buttons. */
+        private inner class DragListener : View.OnTouchListener {
+            private var startRawX = 0f
+            private var startRawY = 0f
+            private var startX = 0
+            private var startY = 0
+
+            override fun onTouch(view: View, event: MotionEvent): Boolean {
+                val current = params ?: return false
+                if (running) return false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startRawX = event.rawX
+                        startRawY = event.rawY
+                        startX = current.x
+                        startY = current.y
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val screen = currentDisplaySize(getSystemService(DisplayManager::class.java))
+                        current.x = (startX + event.rawX - startRawX).toInt()
+                            .coerceIn(0, (screen.x - root.width).coerceAtLeast(0))
+                        current.y = (startY + event.rawY - startRawY).toInt()
+                            .coerceIn(0, (screen.y - root.height).coerceAtLeast(0))
+                        dragged = current.x to current.y
+                        if (attached) runCatching { windowManager.updateViewLayout(root, current) }
+                    }
+                }
+                return true
             }
         }
 

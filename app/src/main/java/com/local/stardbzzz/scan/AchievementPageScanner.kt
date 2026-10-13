@@ -39,7 +39,8 @@ class MissingTabsException(tabs: Collection<String>) :
 
 /**
  * Walks every tab → sidebar category → list page of the in-game achievement screen and
- * collects the rows it reads. Scrolling stops when a page reads the same as the previous one.
+ * collects the rows it reads. Scrolling stops when a page reads the same as the previous one
+ * (allowing for OCR misreading a character or two between frames).
  */
 class AchievementPageScanner(
     private val reader: ScreenReader,
@@ -52,6 +53,7 @@ class AchievementPageScanner(
     private var pages = 0
     private var currentTab: String? = null
     private var currentCategory: String? = null
+    private var gameCompletedCount: Int? = null
 
     suspend fun scan(): ScanCapture {
         val first = readPage()
@@ -65,7 +67,7 @@ class AchievementPageScanner(
             delay(timings.afterTapMillis)
             scanTab(tab)
         }
-        return ScanCapture(rows.toList(), first.completedCount)
+        return ScanCapture(rows.toList(), gameCompletedCount)
     }
 
     /** A page counts as the achievement page with 3 of 4 tabs; re-read so a single OCR miss can't drop a whole tab. */
@@ -112,9 +114,9 @@ class AchievementPageScanner(
 
     private suspend fun scanCategory(tab: String, category: String) {
         // The game may keep an earlier scroll position, so fling back up until the list stops moving.
-        scrollUntilStable(ListSwipeTo, ListSwipeFrom, timings.flingMillis, ::rowNames) {}
+        scrollUntilStable(ListSwipeTo, ListSwipeFrom, timings.flingMillis, ::rowEntries) {}
 
-        scrollUntilStable(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, ::rowNames) { page ->
+        scrollUntilStable(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, ::rowEntries) { page ->
             page.rows.forEach { row ->
                 rows += ObservedRow(tab, category, row.name, row.description, row.status)
                 seenNames += AchievementMatcher.normalizeText(row.name)
@@ -123,7 +125,8 @@ class AchievementPageScanner(
         }
     }
 
-    private fun rowNames(page: ParsedScreen): List<String> = page.rows.map { it.name }
+    /** Name plus description: tiers of one achievement share a name and differ only in the description's numbers. */
+    private fun rowEntries(page: ParsedScreen): List<String> = page.rows.map { "${it.name} ${it.description}" }
 
     /**
      * Reads a page, swipes, and repeats until [contentOf] reads the same [StableReads] times in a row.
@@ -142,8 +145,9 @@ class AchievementPageScanner(
         repeat(MaxPagesPerCategory) {
             val page = readPage()
             onPage(page)
+            report()
             val names = contentOf(page)
-            if (names == previousNames) {
+            if (previousNames?.let { sameContent(it, names) } == true) {
                 if (++unchangedReads >= StableReads) return
             } else {
                 unchangedReads = 0
@@ -159,7 +163,11 @@ class AchievementPageScanner(
         repeat(PageReadAttempts) { attempt ->
             val page = GameScreenParser.parse(reader.read())
             pages++
-            if (page.isAchievementPage) return page
+            if (page.isAchievementPage) {
+                // Any one frame can have the counter misread or briefly covered; keep the first clean read.
+                if (gameCompletedCount == null) gameCompletedCount = page.completedCount
+                return page
+            }
             if (attempt < PageReadAttempts - 1) delay(timings.afterSwipeMillis)
         }
         throw NotOnAchievementPageException()
@@ -169,11 +177,16 @@ class AchievementPageScanner(
         onProgress(ScanProgress(currentTab, currentCategory, pages, seenNames.size))
     }
 
-    /** Labels like 代理人秘闻 / 代理人信赖 differ by few characters, so only exact or partial (clipped) reads count. */
+    /**
+     * Labels like 代理人秘闻 / 代理人信赖 differ by two characters, so beyond exact or partial (clipped) reads
+     * only a single misread character counts (代理人秘圓), and never one that changes a number.
+     */
     private fun isSameLabel(a: String, b: String): Boolean {
         val x = AchievementMatcher.normalizeText(a)
         val y = AchievementMatcher.normalizeText(b)
-        return x == y || (minOf(x.length, y.length) >= 2 && (x.contains(y) || y.contains(x)))
+        if (x == y || (minOf(x.length, y.length) >= 2 && (x.contains(y) || y.contains(x)))) return true
+        return minOf(x.length, y.length) >= 3 && AchievementMatcher.levenshtein(x, y) <= 1 &&
+            x.filter { it.isDigit() } == y.filter { it.isDigit() }
     }
 
     companion object {
@@ -182,6 +195,36 @@ class AchievementPageScanner(
         private const val MaxPagesPerCategory = 120
         private const val PageReadAttempts = 3
         private const val StableReads = 2
+        private const val SameNameSimilarity = 0.7
+
+        /**
+         * Whether two reads of the same screen region show the same entries. OCR of an unchanged frame still
+         * varies (从零 → 从雪, 叩响 → D响, mangled brackets) and can drop an entry, so on a full page one
+         * entry may be misread or missing. Entries are compared position by position: a scroll of even one row
+         * shifts every position, and numbers must match exactly, so tiers of one achievement (same name,
+         * 10 vs 50 in the description) are never taken for each other.
+         */
+        fun sameContent(previous: List<String>, current: List<String>): Boolean {
+            val a = previous.map(AchievementMatcher::normalizeText)
+            val b = current.map(AchievementMatcher::normalizeText)
+            val forgiven = if (maxOf(a.size, b.size) >= 4) 1 else 0
+            return when (a.size - b.size) {
+                0 -> a.indices.count { !similarEntry(a[it], b[it]) } <= forgiven
+                1 -> forgiven == 1 && missingOne(longer = a, shorter = b)
+                -1 -> forgiven == 1 && missingOne(longer = b, shorter = a)
+                else -> false
+            }
+        }
+
+        /** [shorter] is [longer] with one entry left out and everything else read alike. */
+        private fun missingOne(longer: List<String>, shorter: List<String>): Boolean =
+            longer.indices.any { skipped ->
+                shorter.indices.all { i -> similarEntry(longer[if (i < skipped) i else i + 1], shorter[i]) }
+            }
+
+        private fun similarEntry(a: String, b: String): Boolean =
+            a.filter { it.isDigit() } == b.filter { it.isDigit() } &&
+                (a == b || AchievementMatcher.levenshtein(a, b) <= 1 || AchievementMatcher.similarity(a, b) >= SameNameSimilarity)
 
         // A ~0.40 screen-height drag moves the list about three rows (rows are ~0.136 apart, five are visible),
         // so consecutive pages overlap and no row is skipped.

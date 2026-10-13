@@ -53,7 +53,7 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit) {
+fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit, onOpenScan: () -> Unit) {
     val updateState by updater.state.collectAsStateWithLifecycle()
     BackHandler(onBack = onBack)
 
@@ -85,6 +85,11 @@ fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit) {
                 modifier = Modifier.clickable(enabled = updateState == UpdateState.Idle) {
                     updater.checkManually()
                 },
+            )
+            ListItem(
+                headlineContent = { Text("游戏成就扫描") },
+                supportingContent = { Text("自动识别游戏成就页，把完成状态同步到 stardb") },
+                modifier = Modifier.clickable(onClick = onOpenScan),
             )
         }
     }

@@ -1,0 +1,191 @@
+package com.local.stardbzzz.scan
+
+import java.text.Normalizer
+import kotlin.math.max
+import kotlin.math.min
+
+/** The fields of a local achievement the scan compares against. */
+data class ScanCandidate(
+    val id: String,
+    val name: String,
+    val description: String,
+    val category: String,
+    val isCompleted: Boolean,
+)
+
+/** One achievement row as seen in the game, with the sidebar category it was listed under. */
+data class ObservedRow(
+    val tab: String,
+    val category: String,
+    val name: String,
+    val description: String,
+    val status: RowStatus,
+)
+
+data class ScanDiff(
+    val id: String,
+    val name: String,
+    val category: String,
+    /** true: completed in game but not locally; false: completed locally but in progress in game. */
+    val markCompleted: Boolean,
+    val gameStatus: String,
+)
+
+data class ScanReport(
+    val gameCompletedCount: Int?,
+    val localCompletedCount: Int,
+    val observedCount: Int,
+    val matchedCount: Int,
+    val unmatched: List<ObservedRow>,
+    val diffs: List<ScanDiff>,
+)
+
+/**
+ * Fuzzy-matches OCR'd achievement names to local achievements.
+ * OCR mostly gets names right but drops or swaps the odd character and mangles 「」『』 brackets,
+ * so names are compared after stripping punctuation, with an edit-distance ratio.
+ */
+class AchievementMatcher(private val candidates: List<ScanCandidate>) {
+    private val prepared = candidates.map { candidate ->
+        PreparedCandidate(
+            candidate = candidate,
+            names = nameVariants(candidate.name).map(::normalizeText).distinct(),
+            description = normalizeText(candidate.description).take(DescriptionPrefix),
+            category = normalizeText(candidate.category),
+        )
+    }
+    private val categories = prepared.map { it.category }.filter { it.isNotEmpty() }.distinct()
+
+    fun match(name: String, description: String, categoryHint: String?): ScanCandidate? {
+        val normalizedName = normalizeText(name)
+        if (normalizedName.isEmpty()) return null
+        val normalizedDescription = normalizeText(description).take(DescriptionPrefix)
+
+        val category = categoryHint?.let(::normalizeText)?.let { hint ->
+            categories.maxByOrNull { similarity(it, hint) }?.takeIf { similarity(it, hint) >= CategoryThreshold }
+        }
+        val inCategory = category?.let { wanted -> prepared.filter { it.category == wanted } }.orEmpty()
+        return bestOf(inCategory, normalizedName, normalizedDescription)
+            ?: bestOf(prepared, normalizedName, normalizedDescription)
+    }
+
+    private fun bestOf(pool: List<PreparedCandidate>, name: String, description: String): ScanCandidate? {
+        if (pool.isEmpty()) return null
+        val scored = pool.map { candidate -> candidate to candidate.names.maxOf { similarity(it, name) } }
+        val bestScore = scored.maxOf { it.second }
+        if (bestScore < NameThreshold) return null
+        // Same or near-same names (e.g. per-version duplicates) are separated by their description.
+        return scored
+            .filter { it.second >= bestScore - TieMargin }
+            .maxByOrNull { (candidate, score) -> score + similarity(candidate.description, description) * 0.01 }
+            ?.first
+            ?.candidate
+    }
+
+    private data class PreparedCandidate(
+        val candidate: ScanCandidate,
+        val names: List<String>,
+        val description: String,
+        val category: String,
+    )
+
+    companion object {
+        private const val NameThreshold = 0.75
+        private const val CategoryThreshold = 0.6
+        private const val TieMargin = 0.02
+        private const val DescriptionPrefix = 40
+        private val GenderVariantRegex = Regex("""\{M#([^{}]*)\}\{F#([^{}]*)\}""", RegexOption.IGNORE_CASE)
+
+        /** NFKC folds full-width forms; everything except letters and digits (brackets, spaces, punctuation) is dropped. */
+        fun normalizeText(text: String): String =
+            Normalizer.normalize(text, Normalizer.Form.NFKC)
+                .lowercase()
+                .filter { it.isLetterOrDigit() }
+
+        /** stardb keeps both protagonist variants ({M#..}{F#..}); the game shows one of them. */
+        fun nameVariants(name: String): List<String> {
+            if (!GenderVariantRegex.containsMatchIn(name)) return listOf(name)
+            return listOf(
+                name.replace(GenderVariantRegex) { it.groupValues[1] },
+                name.replace(GenderVariantRegex) { it.groupValues[2] },
+            )
+        }
+
+        fun similarity(a: String, b: String): Double {
+            if (a == b) return 1.0
+            val longest = max(a.length, b.length)
+            if (longest == 0) return 1.0
+            return 1.0 - levenshtein(a, b).toDouble() / longest
+        }
+
+        private fun levenshtein(a: String, b: String): Int {
+            var previous = IntArray(b.length + 1) { it }
+            var current = IntArray(b.length + 1)
+            for (i in 1..a.length) {
+                current[0] = i
+                for (j in 1..b.length) {
+                    val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                    current[j] = min(min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost)
+                }
+                val swap = previous
+                previous = current
+                current = swap
+            }
+            return previous[b.length]
+        }
+    }
+}
+
+object ScanReportBuilder {
+    fun build(
+        observed: List<ObservedRow>,
+        candidates: List<ScanCandidate>,
+        gameCompletedCount: Int?,
+    ): ScanReport {
+        val matcher = AchievementMatcher(candidates)
+        // The same row is usually captured on two consecutive pages; keep one, preferring a completed reading.
+        val unique = observed
+            .groupBy { Triple(it.tab, AchievementMatcher.normalizeText(it.category), AchievementMatcher.normalizeText(it.name)) }
+            .map { (_, rows) -> rows.firstOrNull { it.status is RowStatus.Completed } ?: rows.first() }
+
+        val unmatched = mutableListOf<ObservedRow>()
+        val statusById = linkedMapOf<String, Pair<ScanCandidate, ObservedRow>>()
+        unique.forEach { row ->
+            val candidate = matcher.match(row.name, row.description, row.category)
+            if (candidate == null) {
+                unmatched += row
+                return@forEach
+            }
+            val existing = statusById[candidate.id]
+            if (existing == null || (existing.second.status !is RowStatus.Completed && row.status is RowStatus.Completed)) {
+                statusById[candidate.id] = candidate to row
+            }
+        }
+
+        val diffs = statusById.values.mapNotNull { (candidate, row) ->
+            val completedInGame = row.status is RowStatus.Completed
+            if (completedInGame == candidate.isCompleted) return@mapNotNull null
+            ScanDiff(
+                id = candidate.id,
+                name = candidate.name,
+                category = candidate.category,
+                markCompleted = completedInGame,
+                gameStatus = row.status.label(),
+            )
+        }
+
+        return ScanReport(
+            gameCompletedCount = gameCompletedCount,
+            localCompletedCount = candidates.count { it.isCompleted },
+            observedCount = unique.size,
+            matchedCount = statusById.size,
+            unmatched = unmatched,
+            diffs = diffs.sortedByDescending { it.markCompleted },
+        )
+    }
+
+    private fun RowStatus.label(): String = when (this) {
+        is RowStatus.Completed -> date?.let { "已完成（$it）" } ?: "已完成"
+        is RowStatus.InProgress -> "进行中 $current/$target"
+    }
+}

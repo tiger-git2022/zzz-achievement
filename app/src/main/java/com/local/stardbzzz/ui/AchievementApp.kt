@@ -127,6 +127,7 @@ import com.local.stardbzzz.data.local.SyncStatus
 import com.local.stardbzzz.data.repository.AchievementScreenState
 import com.local.stardbzzz.data.repository.AchievementUiModel
 import com.local.stardbzzz.data.update.AppUpdater
+import com.local.stardbzzz.scan.ScanCoordinator
 import com.local.stardbzzz.R
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.Dispatchers
@@ -141,7 +142,7 @@ import java.net.URLEncoder
 import kotlin.math.abs
 
 @Composable
-fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater) {
+fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoordinator: ScanCoordinator) {
     val state by viewModel.screenState.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -149,6 +150,15 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater) {
     val lifecycleOwner = LocalLifecycleOwner.current
     var selectedAchievement by remember { mutableStateOf<AchievementUiModel?>(null) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showScan by rememberSaveable { mutableStateOf(false) }
+    val openScanRequested by scanCoordinator.openScanScreen.collectAsStateWithLifecycle()
+
+    LaunchedEffect(openScanRequested) {
+        if (openScanRequested) {
+            showScan = true
+            scanCoordinator.consumeOpenScanScreen()
+        }
+    }
 
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
@@ -168,8 +178,13 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater) {
 
     UpdateDialogs(updater)
 
+    if (showScan) {
+        ScanScreen(coordinator = scanCoordinator, onBack = { showScan = false })
+        return
+    }
+
     if (showSettings) {
-        SettingsScreen(updater = updater, onBack = { showSettings = false })
+        SettingsScreen(updater = updater, onBack = { showSettings = false }, onOpenScan = { showScan = true })
         return
     }
 

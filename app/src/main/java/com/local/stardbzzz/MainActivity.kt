@@ -26,7 +26,11 @@ class MainActivity : ComponentActivity() {
                     val viewModel: AchievementViewModel = viewModel(
                         factory = AchievementViewModelFactory(repository),
                     )
-                    AchievementApp(viewModel = viewModel, updater = container.updater)
+                    AchievementApp(
+                        viewModel = viewModel,
+                        updater = container.updater,
+                        scanCoordinator = container.scanCoordinator,
+                    )
                 }
             }
         }

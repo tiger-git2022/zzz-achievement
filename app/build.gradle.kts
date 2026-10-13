@@ -101,4 +101,9 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-urlconnection:4.12.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
+
+    // On-device Chinese OCR for the in-game achievement scan; the model is bundled, no Play services needed.
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+
+    testImplementation("junit:junit:4.13.2")
 }

@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">绝区零成就</string>
+    <string name="scan_accessibility_label">绝区零成就 · 自动扫描</string>
+    <string name="scan_accessibility_description">扫描游戏成就页时，用于自动点击分类、滑动列表并显示扫描悬浮窗。只在你点击「开始扫描」后操作，不读取其他应用的内容。</string>
 </resources>

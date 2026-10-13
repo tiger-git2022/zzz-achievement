@@ -9,6 +9,7 @@ import com.local.stardbzzz.data.network.StardbNetwork
 import com.local.stardbzzz.data.network.WebViewAchievementWriteSyncClient
 import com.local.stardbzzz.data.repository.AchievementRepository
 import com.local.stardbzzz.data.update.AppUpdater
+import com.local.stardbzzz.scan.ScanCoordinator
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
@@ -29,4 +30,6 @@ class AppContainer(context: Context) {
     )
 
     val updater = AppUpdater(appContext)
+
+    val scanCoordinator = ScanCoordinator(appContext, repository)
 }

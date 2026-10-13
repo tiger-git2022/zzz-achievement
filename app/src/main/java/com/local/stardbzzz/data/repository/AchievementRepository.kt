@@ -207,7 +207,7 @@ class AchievementRepository(
     }
 
     suspend fun scanCandidates(): List<ScanCandidate> =
-        dao.allSnapshot().map { ScanCandidate(it.id, it.name, it.description, it.category, it.isCompleted) }
+        dao.allSnapshot().map { ScanCandidate(it.id, it.name, it.description, it.category, it.isCompleted, it.version) }
 
     /** Applies completion states read from the game, then syncs them to stardb in one pass. */
     suspend fun applyScannedCompletion(changes: Map<String, Boolean>) {

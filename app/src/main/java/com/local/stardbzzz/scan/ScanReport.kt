@@ -11,7 +11,11 @@ data class ScanCandidate(
     val description: String,
     val category: String,
     val isCompleted: Boolean,
-)
+    /** stardb can list one achievement under several ids; records with the same name, category and version are one. */
+    val version: String = "",
+) {
+    val linkKey: Triple<String, String, String> get() = Triple(name, category, version)
+}
 
 /** One achievement row as seen in the game, with the sidebar category it was listed under. */
 data class ObservedRow(
@@ -32,13 +36,25 @@ data class ScanDiff(
 )
 
 data class ScanReport(
+    /** The game's own 完成数 counter. */
     val gameCompletedCount: Int?,
+    /** Achievements this scan saw as completed in the game; equals [gameCompletedCount] when nothing was missed. */
+    val gameCompletedSeen: Int,
+    /** Locally completed achievements (records listing the same achievement count once). */
     val localCompletedCount: Int,
+    /** Locally completed records, which can exceed [localCompletedCount] when stardb lists one achievement twice. */
+    val localCompletedRecords: Int,
     val observedCount: Int,
     val matchedCount: Int,
     val unmatched: List<ObservedRow>,
+    /** Completed locally but not seen by this scan: missed by the scan, misread, or not in the game's list. */
+    val localCompletedNotSeen: List<ScanCandidate>,
     val diffs: List<ScanDiff>,
-)
+) {
+    /** The local completed count if every diff were applied. */
+    val localCompletedAfterSync: Int
+        get() = localCompletedCount + diffs.count { it.markCompleted } - diffs.count { !it.markCompleted }
+}
 
 /**
  * Fuzzy-matches OCR'd achievement names to local achievements.
@@ -47,52 +63,65 @@ data class ScanReport(
  */
 class AchievementMatcher(private val candidates: List<ScanCandidate>) {
     private val prepared = candidates.map { candidate ->
+        val names = nameVariants(candidate.name).map(::normalizeText).distinct()
         PreparedCandidate(
             candidate = candidate,
-            names = nameVariants(candidate.name).map(::normalizeText).distinct(),
+            names = names,
+            stems = names.map(::nameStem).distinct(),
             description = normalizeText(candidate.description).take(DescriptionPrefix),
+            numbers = numbersIn(candidate.description),
             category = normalizeText(candidate.category),
         )
     }
     private val categories = prepared.map { it.category }.filter { it.isNotEmpty() }.distinct()
 
     fun match(name: String, description: String, categoryHint: String?): ScanCandidate? {
-        val normalizedName = normalizeText(name)
-        if (normalizedName.isEmpty()) return null
-        val normalizedDescription = normalizeText(description).take(DescriptionPrefix)
+        val stem = nameStem(normalizeText(name))
+        if (stem.isEmpty()) return null
+        val observed = ObservedText(stem, normalizeText(description).take(DescriptionPrefix), numbersIn(description))
 
         val category = categoryHint?.let(::normalizeText)?.let { hint ->
             categories.maxByOrNull { similarity(it, hint) }?.takeIf { similarity(it, hint) >= CategoryThreshold }
         }
         val inCategory = category?.let { wanted -> prepared.filter { it.category == wanted } }.orEmpty()
-        return bestOf(inCategory, normalizedName, normalizedDescription)
-            ?: bestOf(prepared, normalizedName, normalizedDescription)
+        return bestOf(inCategory, observed) ?: bestOf(prepared, observed)
     }
 
-    private fun bestOf(pool: List<PreparedCandidate>, name: String, description: String): ScanCandidate? {
+    private fun bestOf(pool: List<PreparedCandidate>, observed: ObservedText): ScanCandidate? {
         if (pool.isEmpty()) return null
-        val scored = pool.map { candidate -> candidate to candidate.names.maxOf { similarity(it, name) } }
+        // Names are compared without their tier mark (Ⅰ/Ⅱ/Ⅲ), which OCR reads as 1, =, |, 三 or !.
+        val scored = pool.map { candidate -> candidate to candidate.stems.maxOf { similarity(it, observed.stem) } }
         val bestScore = scored.maxOf { it.second }
         if (bestScore < NameThreshold) return null
         val tied = scored.filter { it.second >= bestScore - TieMargin }.map { it.first }
-        if (tied.size == 1) return tied.single().candidate
 
-        // Same or near-same names are told apart by description; if the read can't tell them apart,
-        // leave the row unmatched rather than guess and sync the wrong achievement.
-        val byDescription = tied
-            .map { it to similarity(it.description, description) }
+        // Records with the same full name and description are one achievement listed twice; either one works.
+        val groups = tied.groupBy { it.names to it.description }.values.toList()
+        if (groups.size == 1) return groups.single().first().candidate
+
+        // Tiers share a name and differ only in their description's numbers (10次 / 50次 / 200次).
+        if (observed.numbers.isNotEmpty()) {
+            groups.filter { it.first().numbers == observed.numbers }.singleOrNull()?.let { return it.first().candidate }
+        }
+
+        // Otherwise tell them apart by description; if the read can't, leave the row unmatched rather than
+        // guess and sync the wrong achievement.
+        val byDescription = groups
+            .map { it.first() to similarity(it.first().description, observed.description) }
             .sortedByDescending { it.second }
-        val (best, bestDescriptionScore) = byDescription.first()
-        // Records with the same description are the same achievement listed twice; either one works.
-        val rival = byDescription.firstOrNull { it.first.description != best.description } ?: return best.candidate
-        if (description.isEmpty() || bestDescriptionScore - rival.second < DescriptionMargin) return null
+        val (best, bestDescriptionScore) = byDescription[0]
+        if (observed.description.isEmpty() || bestDescriptionScore - byDescription[1].second < DescriptionMargin) return null
         return best.candidate
     }
+
+    private data class ObservedText(val stem: String, val description: String, val numbers: List<String>)
 
     private data class PreparedCandidate(
         val candidate: ScanCandidate,
         val names: List<String>,
+        val stems: List<String>,
         val description: String,
+        val numbers: List<String>,
         val category: String,
     )
 
@@ -104,11 +133,52 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
         private const val DescriptionPrefix = 40
         private val GenderVariantRegex = Regex("""\{M#([^{}]*)\}\{F#([^{}]*)\}""", RegexOption.IGNORE_CASE)
 
-        /** NFKC folds full-width forms; everything except letters and digits (brackets, spaces, punctuation) is dropped. */
+        /**
+         * Characters ML Kit reads in place of the game's simplified Chinese: traditional or variant forms and
+         * look-alikes seen on a real phone (採索 for 探索, 斷金製石 for 断金裂石, カ for 力). Both sides of every
+         * comparison go through this, so mapping a real character too only matters if two achievements
+         * differed by exactly that character.
+         */
+        private val OcrConfusables = mapOf(
+            '採' to '探',
+            '來' to '来',
+            '樹' to '树',
+            '製' to '裂',
+            '購' to '购',
+            '濱' to '滨',
+            '慣' to '愤',
+            'カ' to '力',
+        )
+
+        /**
+         * NFKC folds full-width forms; known OCR look-alikes are mapped to what the game shows; everything except
+         * letters and digits (brackets, spaces, punctuation) is dropped.
+         */
         fun normalizeText(text: String): String =
             Normalizer.normalize(text, Normalizer.Form.NFKC)
                 .lowercase()
+                .map { OcrConfusables[it] ?: it }
                 .filter { it.isLetterOrDigit() }
+                .joinToString("")
+
+        /**
+         * A normalized name without its trailing tier mark. Ⅰ/Ⅱ/Ⅲ normalize to i/ii/iii, and OCR reads them as
+         * 1, l, 一, 三 (or =, |, ! which normalization already drops), so none of these can be trusted to pick
+         * the tier; the description's numbers do that.
+         */
+        fun nameStem(normalizedName: String): String {
+            val stem = normalizedName.trimEnd { it in TierMarks }
+            return if (stem.length >= 2) stem else normalizedName
+        }
+
+        private const val TierMarks = "1ilvx一二三"
+        private val NumberRegex = Regex("""\d+""")
+
+        /** The numbers in a text, in order, without leading zeros. */
+        fun numbersIn(text: String): List<String> =
+            NumberRegex.findAll(Normalizer.normalize(text, Normalizer.Form.NFKC))
+                .map { it.value.trimStart('0').ifEmpty { "0" } }
+                .toList()
 
         /** stardb keeps both protagonist variants ({M#..}{F#..}); the game shows one of them. */
         fun nameVariants(name: String): List<String> {
@@ -180,15 +250,32 @@ object ScanReportBuilder {
             )
         }
 
+        val seenLinks = statusById.values.map { it.first.linkKey }.toSet()
+        val completedSeen = statusById.values
+            .filter { it.second.status is RowStatus.Completed }
+            .map { it.first.linkKey }
+            .distinct().size + unmatched.values.count { it.status is RowStatus.Completed }
+        val notSeen = candidates
+            .filter { it.isCompleted && it.linkKey !in seenLinks }
+            .distinctBy { it.linkKey }
+            .sortedWith(compareBy({ it.category }, { it.name }))
+
         return ScanReport(
             gameCompletedCount = gameCompletedCount,
-            localCompletedCount = candidates.count { it.isCompleted },
+            gameCompletedSeen = completedSeen,
+            localCompletedCount = completedAchievements(candidates),
+            localCompletedRecords = candidates.count { it.isCompleted },
             observedCount = statusById.size + unmatched.size,
             matchedCount = statusById.size,
             unmatched = unmatched.values.toList(),
+            localCompletedNotSeen = notSeen,
             diffs = diffs.sortedByDescending { it.markCompleted },
         )
     }
+
+    /** Completed achievements, counting records that list the same achievement once. */
+    fun completedAchievements(candidates: List<ScanCandidate>): Int =
+        candidates.filter { it.isCompleted }.map { it.linkKey }.distinct().size
 
     private fun RowStatus.label(): String = when (this) {
         is RowStatus.Completed -> date?.let { "已完成（$it）" } ?: "已完成"

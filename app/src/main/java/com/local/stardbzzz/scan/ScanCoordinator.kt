@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -108,20 +109,26 @@ class ScanCoordinator(
             try {
                 val candidates = repository.scanCandidates()
                 require(candidates.isNotEmpty()) { "本地还没有成就数据，请先在 App 里登录并刷新" }
+                // A panel dragged over the tab bar while Ready moves back to its spot once Running; let it.
+                delay(OverlaySettleMillis)
                 val debug = if (_saveDebugFrames.value) DebugFrameWriter(debugDirectory) else null
+                debug?.writeCandidates(candidates)
+                var progress = ScanProgress(null, null, 0, 0)
                 val reader = ScreenReader {
                     val frame = screen.capture()
                     val scaled = scaleForOcr(frame)
                     try {
-                        recognizer.recognize(scaled).also { boxes -> debug?.write(scaled, boxes) }
+                        recognizer.recognize(scaled).also { boxes -> debug?.write(scaled, boxes, progress) }
                     } finally {
                         if (scaled !== frame) scaled.recycle()
                     }
                 }
-                val result = AchievementPageScanner(reader, gestures) { progress ->
-                    _state.value = ScanState.Running(progress)
+                val result = AchievementPageScanner(reader, gestures) { update ->
+                    progress = update
+                    _state.value = ScanState.Running(update)
                 }.scan()
                 val report = ScanReportBuilder.build(result.rows, candidates, result.gameCompletedCount)
+                debug?.writeReport(report)
                 _lastReport.value = report
                 _state.value = ScanState.Finished(report)
             } catch (cancelled: CancellationException) {
@@ -168,10 +175,14 @@ class ScanCoordinator(
         repository.applyScannedCompletion(diffs.associate { it.id to it.markCompleted })
         val applied = diffs.map { it.id }.toSet()
         // One diff can update several linked records, so recount instead of adjusting by the diff count.
-        val localCompleted = repository.scanCandidates().count { it.isCompleted }
+        val candidates = repository.scanCandidates()
         val updated = _lastReport.value?.let { report ->
             report.copy(
-                localCompletedCount = localCompleted,
+                localCompletedCount = ScanReportBuilder.completedAchievements(candidates),
+                localCompletedRecords = candidates.count { it.isCompleted },
+                localCompletedNotSeen = report.localCompletedNotSeen.filter { notSeen ->
+                    candidates.any { it.linkKey == notSeen.linkKey && it.isCompleted }
+                },
                 diffs = report.diffs.filterNot { it.id in applied },
             )
         } ?: return
@@ -196,8 +207,9 @@ class ScanCoordinator(
     }
 
     /**
-     * Saves each scanned frame and its OCR lines (same TSV layout as the unit-test fixtures)
-     * under Android/data/com.local.stardbzzz/files/scan-debug/ for troubleshooting.
+     * Saves each scanned frame and its OCR lines (same TSV layout as the unit-test fixtures) under
+     * Android/data/com.local.stardbzzz/files/scan-debug/<session>/, plus what an offline replay needs
+     * (ScanReplayTest): the local achievement list, which tab/category each frame belongs to, and the report.
      */
     private class DebugFrameWriter(root: File?) {
         private val directory = root?.let {
@@ -205,19 +217,29 @@ class ScanCoordinator(
         }
         private var index = 0
 
-        fun write(frame: Bitmap, boxes: List<OcrBox>) {
+        fun write(frame: Bitmap, boxes: List<OcrBox>, progress: ScanProgress) {
             val dir = directory ?: return
             if (index >= MaxDebugFrames) return
             index++
             val name = "frame_%04d".format(Locale.ROOT, index)
             runCatching {
-                File(dir, "$name.jpg").outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, 70, it) }
-                File(dir, "$name.tsv").writeText(
-                    boxes.joinToString("\n", postfix = "\n") { box ->
-                        "%.4f\t%.4f\t%.4f\t%.4f\t%s".format(Locale.ROOT, box.left, box.top, box.right, box.bottom, box.text)
-                    },
+                // High quality so another OCR engine can be compared on these frames fairly.
+                File(dir, "$name.jpg").outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                File(dir, "$name.tsv").writeText(ScanDebugFiles.frameTsv(boxes))
+                File(dir, ScanDebugFiles.FrameIndex).appendText(
+                    ScanDebugFiles.frameIndexLine(name, progress.tab.orEmpty(), progress.category.orEmpty()),
                 )
             }
+        }
+
+        fun writeCandidates(candidates: List<ScanCandidate>) {
+            val dir = directory ?: return
+            runCatching { File(dir, ScanDebugFiles.Candidates).writeText(ScanDebugFiles.candidatesTsv(candidates)) }
+        }
+
+        fun writeReport(report: ScanReport) {
+            val dir = directory ?: return
+            runCatching { File(dir, ScanDebugFiles.Report).writeText(ScanDebugFiles.reportText(report)) }
         }
     }
 
@@ -225,5 +247,6 @@ class ScanCoordinator(
         const val KeySaveDebugFrames = "save_debug_frames"
         const val OcrMaxWidth = 3200
         const val MaxDebugFrames = 1500
+        const val OverlaySettleMillis = 600L
     }
 }

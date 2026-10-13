@@ -199,8 +199,23 @@ private fun androidx.compose.foundation.lazy.LazyListScope.reportItems(
         Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("扫描结果", style = MaterialTheme.typography.titleMedium)
-                Text("游戏完成数 ${report.gameCompletedCount ?: "未识别"} · 本地已完成 ${report.localCompletedCount}")
+                Text("游戏完成数 ${report.gameCompletedCount ?: "未识别"} · 本次看到已完成 ${report.gameCompletedSeen} 条")
+                Text(
+                    buildString {
+                        append("本地已完成 ${report.localCompletedCount} 个")
+                        if (report.localCompletedRecords != report.localCompletedCount) {
+                            append("（${report.localCompletedRecords} 条记录，有成就被 stardb 重复收录）")
+                        }
+                        append(" · 同步全部差异后 ${report.localCompletedAfterSync} 个")
+                    },
+                )
                 Text("识别 ${report.observedCount} 条 · 匹配 ${report.matchedCount} 条 · 未匹配 ${report.unmatched.size} 条")
+                if (report.gameCompletedCount != null && report.localCompletedAfterSync != report.gameCompletedCount) {
+                    Text(
+                        "同步后的本地完成数与游戏不一致，请先查看下方「未匹配」和「本地已完成但本次没看到」再同步。",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
     }
@@ -218,20 +233,36 @@ private fun androidx.compose.foundation.lazy.LazyListScope.reportItems(
     }
     if (report.unmatched.isNotEmpty()) {
         item {
-            var expanded by remember { mutableStateOf(false) }
-            Column {
-                ListItem(
-                    headlineContent = { Text("未匹配的成就（${report.unmatched.size}）") },
-                    supportingContent = { Text("游戏里识别到、但本地找不到的名称，可能是识别错误或 stardb 未收录") },
-                    modifier = Modifier.clickable { expanded = !expanded },
-                )
-                if (expanded) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                        report.unmatched.forEach { row ->
-                            Text("${row.tab} / ${row.category}：${row.name}", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
+            ExpandableList(
+                title = "未匹配的成就（${report.unmatched.size}）",
+                subtitle = "游戏里识别到、但本地找不到的名称，可能是识别错误或 stardb 未收录",
+                lines = report.unmatched.map { row -> "${row.tab} / ${row.category}：${row.name}" },
+            )
+        }
+    }
+    if (report.localCompletedNotSeen.isNotEmpty()) {
+        item {
+            ExpandableList(
+                title = "本地已完成但本次没看到（${report.localCompletedNotSeen.size}）",
+                subtitle = "本地标记已完成、这次扫描没有对上的成就：可能被漏扫、识别错，或游戏里没有这一项",
+                lines = report.localCompletedNotSeen.map { "${it.category}：${it.name}" },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ExpandableList(title: String, subtitle: String, lines: List<String>) {
+    var expanded by remember { mutableStateOf(false) }
+    Column {
+        ListItem(
+            headlineContent = { Text(title) },
+            supportingContent = { Text(subtitle) },
+            modifier = Modifier.clickable { expanded = !expanded },
+        )
+        if (expanded) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         }
     }

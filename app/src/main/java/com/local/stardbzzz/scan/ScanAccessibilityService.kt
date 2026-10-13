@@ -107,8 +107,10 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
     }
 
     /**
-     * Small panel at the top of the screen, between the game's "完成数" counter and the tab bar,
-     * so it never covers anything the scan reads or touches. Its text avoids tab and category names.
+     * Small panel at the top of the screen, between the game's "完成数" counter (right edge ~0.14 of the width)
+     * and the tab bar (from ~0.43), so it never covers anything the scan reads or touches. It starts at 0.20:
+     * any closer and OCR merged its text with the counter into one line. Its text avoids tab and category names
+     * and stays short so the panel ends well before the tab bar.
      * Outside a run it can be dragged out of the way (e.g. off the game's menu button); a run always
      * puts it back at that spot, since the panel shows up in the captured frames.
      */
@@ -146,17 +148,17 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
                     return
                 }
                 ScanState.Ready -> {
-                    status.text = "打开成就页后点开始，可拖动"
+                    status.text = "成就页点开始"
                     primary.bind("开始") { coordinator.start() }
                     secondary.bind("退出") { coordinator.endSession() }
                 }
                 is ScanState.Running -> {
-                    status.text = "扫描中 · 第 ${state.progress.pages} 屏 · 已读 ${state.progress.rows} 条"
+                    status.text = "第 ${state.progress.pages} 屏 · 已读 ${state.progress.rows} 条"
                     primary.bind("停止") { coordinator.stop() }
                     secondary.bind(null) {}
                 }
                 is ScanState.Finished -> {
-                    status.text = "扫描完成 · ${state.report.diffs.size} 处差异"
+                    status.text = "完成 · ${state.report.diffs.size} 处差异"
                     primary.bind("查看") { openApp() }
                     secondary.bind("关闭") { coordinator.endSession() }
                 }
@@ -184,7 +186,7 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
 
         private fun show() {
             val width = currentDisplaySize(getSystemService(DisplayManager::class.java)).x
-            status.maxWidth = (width * 0.12f).toInt()
+            status.maxWidth = (width * StatusMaxWidth).toInt()
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -193,7 +195,7 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
                 PixelFormat.TRANSLUCENT,
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
-                val position = dragged.takeUnless { running } ?: ((width * 0.155f).toInt() to dp(4))
+                val position = dragged.takeUnless { running } ?: ((width * PanelLeft).toInt() to dp(4))
                 x = position.first
                 y = position.second
             }
@@ -248,7 +250,7 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
         private fun button(service: AccessibilityService) = TextView(service).apply {
             setTextColor(Color.BLACK)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setPadding(dp(10), dp(4), dp(10), dp(4))
+            setPadding(dp(8), dp(4), dp(8), dp(4))
             background = GradientDrawable().apply {
                 cornerRadius = dp(6).toFloat()
                 setColor(Color.rgb(0xF7, 0xD9, 0x4C))
@@ -270,5 +272,9 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
 
     private companion object {
         const val TapMillis = 60L
+
+        /** Default panel position and status text width, as fractions of the screen width. */
+        const val PanelLeft = 0.20f
+        const val StatusMaxWidth = 0.09f
     }
 }

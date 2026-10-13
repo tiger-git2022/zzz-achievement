@@ -108,6 +108,107 @@ class ScanReportTest {
         assertEquals(2, report.observedCount)
     }
 
+    @Test
+    fun foldsTraditionalAndLookAlikeCharacters() {
+        // Unmatched in the second phone run: 採/探, 來/来, 樹/树, 購/购, カ/力.
+        val readings = AchievementMatcher(
+            listOf(
+                candidate("w1", "工业化空洞探索", "", "空洞探索指南"),
+                candidate("w2", "只是来串个门", "破译[罗斯威克]的绘本残页。", "勘域探境"),
+                candidate("w3", "树间所遗忘的", "", "外环地带"),
+                candidate("w4", "小心别购秀了", "", "代理人秘闻"),
+                candidate("w5", "核心力量训练", "", "绳匠业务"),
+            ),
+        )
+
+        assertEquals("w1", readings.match("I业化空洞採索", "", "空洞採索指南")?.id)
+        assertEquals("w2", readings.match("只是來串个们", "破译[罗新威克的绘本残页。", "勘域探境")?.id)
+        assertEquals("w3", readings.match("樹间所遗忘的", "", null)?.id)
+        assertEquals("w4", readings.match("小心别購秀了", "", null)?.id)
+        assertEquals("w5", readings.match("核心カ量训练", "", null)?.id)
+    }
+
+    @Test
+    fun misreadCategoryNamesStillPickTheirCategory() {
+        val categories = listOf(
+            "法厄同纪事", "代理人秘闻", "独家视界", "代理人信赖", "际会之时", "绳网热议",
+            "绳匠业务", "雅努斯区", "布亚斯特", "卫非地", "外环地带", "索恩区", "罗斯凯利法",
+            "迷宫诡域", "作战技巧", "敌对目标", "战斗成就", "迷失之地", "枯萎之都",
+            "空洞探索指南", "零号密钥", "勘域探境",
+        )
+        // The same name in every category, so only the category hint can pick one.
+        val everywhere = AchievementMatcher(categories.map { candidate(it, "同名成就", "说明$it", it) })
+        val misreads = mapOf(
+            "代理人信" to "代理人信赖",
+            "罗野凯利法" to "罗斯凯利法",
+            "空洞採索指南" to "空洞探索指南",
+            "枯藝之都" to "枯萎之都",
+            "迷官诡域" to "迷宫诡域",
+        )
+
+        misreads.forEach { (read, actual) ->
+            assertEquals(read, actual, everywhere.match("同名成就", "", read)?.id)
+        }
+    }
+
+    @Test
+    fun tellsTiersApartByTheNumbersInTheirDescription() {
+        val tiers = AchievementMatcher(
+            listOf(
+                candidate("t1", "断金裂石Ⅰ", "在战斗中，累计触发10次「毁伤」效果。", "战斗成就"),
+                candidate("t2", "断金裂石Ⅱ", "在战斗中，累计触发50次「毁伤」效果。", "战斗成就"),
+                candidate("t3", "断金裂石Ⅲ", "在战斗中，累计触发200次「毁伤」效果。", "战斗成就"),
+            ),
+        )
+
+        // Sample B from the second phone run: Ⅰ read as 1, Ⅱ and Ⅲ both read as =, 裂 once read as 製.
+        assertEquals("t1", tiers.match("断金裂石1", "在战斗中,累计触发10次『毁伤」效果。", "战斗成就")?.id)
+        assertEquals("t2", tiers.match("断金製石=", "在战斗中,累计触发50次「毁伤｣效果。", "战斗成就")?.id)
+        assertEquals("t3", tiers.match("断金裂石=", "在战斗中,累计触发200次『毁伤」效果。", "战斗成就")?.id)
+        // Without a readable number the tier can't be told; don't guess.
+        assertNull(tiers.match("断金裂石=", "", "战斗成就"))
+        assertNull(tiers.match("断金裂石|", "在战斗中,累计触发次『毁伤」效果。", "战斗成就"))
+    }
+
+    @Test
+    fun tiersWithIdenticalDescriptionsAreNotTreatedAsDuplicates() {
+        val tiers = AchievementMatcher(
+            listOf(
+                candidate("t1", "风起云涌Ⅰ", "完成挑战。", "战斗成就"),
+                candidate("t2", "风起云涌Ⅱ", "完成挑战。", "战斗成就"),
+            ),
+        )
+
+        assertNull(tiers.match("风起云涌|", "完成挑战。", "战斗成就"))
+    }
+
+    @Test
+    fun reconcilesCompletedCountsAndListsWhatTheScanDidNotSee() {
+        val local = listOf(
+            candidate("a", "治安官的答案", "完成法厄同纪事。", "法厄同纪事", completed = true),
+            // stardb lists this achievement twice; it counts once.
+            candidate("a2", "治安官的答案", "完成法厄同纪事。", "法厄同纪事", completed = true),
+            candidate("b", "叩响命运之门", "完成法厄同纪事。", "法厄同纪事"),
+            candidate("c", "从未出现的成就", "说明。", "法厄同纪事", completed = true),
+            candidate("d", "合理利用", "找到音擎。", "空洞探索指南", completed = true),
+        )
+        val observed = listOf(
+            ObservedRow("故事", "法厄同纪事", "治安官的答案", "", RowStatus.Completed("2026-06-29")),
+            ObservedRow("故事", "法厄同纪事", "叩响命运之门", "", RowStatus.Completed("2026-07-08")),
+            ObservedRow("探索", "空洞探索指南", "合理利用", "", RowStatus.Completed("2024-07-07")),
+            ObservedRow("探索", "空洞探索指南", "没有这条", "", RowStatus.Completed(null)),
+        )
+
+        val report = ScanReportBuilder.build(observed, local, gameCompletedCount = 4)
+
+        assertEquals(4, report.gameCompletedSeen)
+        assertEquals(3, report.localCompletedCount)
+        assertEquals(4, report.localCompletedRecords)
+        assertEquals(listOf("c"), report.localCompletedNotSeen.map { it.id })
+        assertEquals(listOf("b"), report.diffs.map { it.id })
+        assertEquals(4, report.localCompletedAfterSync)
+    }
+
     private fun candidate(id: String, name: String, description: String, category: String, completed: Boolean = false) =
         ScanCandidate(id, name, description, category, completed)
 }

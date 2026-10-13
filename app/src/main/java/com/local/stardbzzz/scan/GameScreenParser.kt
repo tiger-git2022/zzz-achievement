@@ -58,6 +58,9 @@ object GameScreenParser {
     private val ProgressRegex = Regex("""(\d+)\s*/\s*(\d+)""")
     private val DigitsRegex = Regex("""\d+""")
 
+    /** A counter some rows show between name and description, e.g. 当前最多拥有: 91. */
+    private val ProgressLineRegex = Regex("""^\D{1,12}[:：]\s*\d+(\s*/\s*\d+)?$""")
+
     fun parse(boxes: List<OcrBox>): ParsedScreen = ParsedScreen(
         tabs = findTabs(boxes),
         sidebar = findSidebar(boxes),
@@ -146,6 +149,7 @@ object GameScreenParser {
     private fun findRows(boxes: List<OcrBox>): List<GameRow> {
         val textColumn = boxes
             .filter { it.left in 0.25f..0.45f && it.centerY in 0.2f..0.97f }
+            .filterNot { ProgressLineRegex.matches(it.text.trim()) }
             .sortedBy { it.centerY }
         val statuses = boxes
             .filter { it.left >= 0.78f && it.centerY in 0.22f..0.97f }

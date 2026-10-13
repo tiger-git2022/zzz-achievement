@@ -51,13 +51,15 @@ class ScanReplayTest {
     fun replaysAFolderOfFrames() {
         val dir = Files.createTempDirectory("scan-replay").toFile()
         try {
-            listOf("story", "city").forEachIndexed { i, fixture ->
+            listOf("story", "city", "explore").forEachIndexed { i, fixture ->
                 val text = javaClass.classLoader!!.getResourceAsStream("ocr/$fixture.tsv")!!.bufferedReader().readText()
                 File(dir, "frame_%04d.tsv".format(Locale.ROOT, i + 1)).writeText(text)
             }
             File(dir, ScanDebugFiles.FrameIndex).writeText(
-                ScanDebugFiles.frameIndexLine("frame_0001", "故事", "法厄同纪事") +
-                    ScanDebugFiles.frameIndexLine("frame_0002", "城市", "绳匠业务"),
+                ScanDebugFiles.frameIndexLine("frame_0001", "故事", "法厄同纪事", collected = true) +
+                    ScanDebugFiles.frameIndexLine("frame_0002", "城市", "绳匠业务", collected = true) +
+                    // Read while switching tabs: the live scan didn't collect these rows, so the replay mustn't.
+                    ScanDebugFiles.frameIndexLine("frame_0003", "探索", "", collected = false),
             )
             val candidates = listOf(
                 ScanCandidate("1", "从零开始的绳匠生活", "", "法厄同纪事", isCompleted = true),
@@ -74,6 +76,7 @@ class ScanReplayTest {
             assertTrue(report, report.contains("## 本地已完成但本次没看到（1）\n绳匠业务\t从未出现的成就"))
             // Every unmatched row lists its nearest local names.
             assertTrue(report, report.contains("LV60，恭迎王的回归\t→ "))
+            assertTrue(report, !report.contains("英雄之旅"))
         } finally {
             dir.deleteRecursively()
         }
@@ -103,7 +106,7 @@ class ScanReplayTest {
             shared.forEach { frame ->
                 val a = GameScreenParser.parse(ScanDebugFiles.parseFrameTsv(framesA.getValue(frame).readText())).rows
                 val b = GameScreenParser.parse(ScanDebugFiles.parseFrameTsv(framesB.getValue(frame).readText())).rows
-                val category = index[frame]?.second
+                val category = index[frame]?.category
                 rowsA += a.size
                 rowsB += b.size
                 if (a.size != b.size) countMismatch++
@@ -151,8 +154,10 @@ class ScanReplayTest {
             val rows = frames.flatMap { (name, file) ->
                 val page = GameScreenParser.parse(ScanDebugFiles.parseFrameTsv(file.readText()))
                 if (completedCount == null) completedCount = page.completedCount
-                val (tab, category) = index[name] ?: ("" to "")
-                page.rows.map { ObservedRow(tab, category, it.name, it.description, it.status) }
+                val info = index[name]
+                // Like the live scan, keep only rows read while going down a category's list.
+                if (info?.collected == false) return@flatMap emptyList()
+                page.rows.map { ObservedRow(info?.tab.orEmpty(), info?.category.orEmpty(), it.name, it.description, it.status) }
             }
             val report = ScanReportBuilder.build(rows, candidates, completedCount)
 

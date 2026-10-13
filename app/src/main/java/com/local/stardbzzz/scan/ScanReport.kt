@@ -223,13 +223,14 @@ object ScanReportBuilder {
         val matcher = AchievementMatcher(candidates)
         // The same row is usually captured on two consecutive pages. Match every reading first and merge by
         // the matched achievement, so same-name achievements told apart by description stay separate.
-        val unmatched = linkedMapOf<Triple<String, String, String>, ObservedRow>()
+        val unmatched = mutableListOf<ObservedRow>()
         val statusById = linkedMapOf<String, Pair<ScanCandidate, ObservedRow>>()
         observed.forEach { row ->
             val candidate = matcher.match(row.name, row.description, row.category)
             if (candidate == null) {
-                val key = Triple(row.tab, AchievementMatcher.normalizeText(row.category), AchievementMatcher.normalizeText(row.name))
-                unmatched.putIfAbsent(key, row)
+                // The same row read on another page has the same name and a similar description; a different
+                // achievement with the same name has a different description and counts on its own.
+                if (unmatched.none { sameUnmatchedRow(it, row) }) unmatched += row
                 return@forEach
             }
             val existing = statusById[candidate.id]
@@ -254,7 +255,7 @@ object ScanReportBuilder {
         val completedSeen = statusById.values
             .filter { it.second.status is RowStatus.Completed }
             .map { it.first.linkKey }
-            .distinct().size + unmatched.values.count { it.status is RowStatus.Completed }
+            .distinct().size + unmatched.count { it.status is RowStatus.Completed }
         val notSeen = candidates
             .filter { it.isCompleted && it.linkKey !in seenLinks }
             .distinctBy { it.linkKey }
@@ -267,11 +268,24 @@ object ScanReportBuilder {
             localCompletedRecords = candidates.count { it.isCompleted },
             observedCount = statusById.size + unmatched.size,
             matchedCount = statusById.size,
-            unmatched = unmatched.values.toList(),
+            unmatched = unmatched.toList(),
             localCompletedNotSeen = notSeen,
             diffs = diffs.sortedByDescending { it.markCompleted },
         )
     }
+
+    private fun sameUnmatchedRow(a: ObservedRow, b: ObservedRow): Boolean {
+        if (a.tab != b.tab || AchievementMatcher.normalizeText(a.category) != AchievementMatcher.normalizeText(b.category)) return false
+        if (AchievementMatcher.normalizeText(a.name) != AchievementMatcher.normalizeText(b.name)) return false
+        if (AchievementMatcher.numbersIn(a.description) != AchievementMatcher.numbersIn(b.description)) return false
+        val descriptionA = AchievementMatcher.normalizeText(a.description)
+        val descriptionB = AchievementMatcher.normalizeText(b.description)
+        return descriptionA.isEmpty() || descriptionB.isEmpty() ||
+            AchievementMatcher.similarity(descriptionA, descriptionB) >= SameDescription
+    }
+
+    /** OCR of one description varies by a character or two between frames; different achievements differ more. */
+    private const val SameDescription = 0.7
 
     /** Completed achievements, counting records that list the same achievement once. */
     fun completedAchievements(candidates: List<ScanCandidate>): Int =

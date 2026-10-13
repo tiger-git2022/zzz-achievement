@@ -7,7 +7,8 @@ import java.util.Locale
  * by the app, which writes them, and ScanReplayTest, which replays a session offline:
  *
  * - frame_NNNN.tsv: one OCR line per row, `left top right bottom text`, coordinates normalized to the frame.
- * - frames.tsv: `frame tab category` — where the scanner was when it read each frame.
+ * - frames.tsv: `frame tab category collected` — where the scanner was when it read each frame, and whether the
+ *   scan collected that frame's rows (1) or only navigated with it (0: tab, sidebar and scroll-to-top reads).
  * - candidates.tsv: `id completed category version name description` — the local achievement list.
  * - report.txt: the scan report, readable and tab-separated.
  */
@@ -33,16 +34,18 @@ object ScanDebugFiles {
             }
             .toList()
 
-    fun frameIndexLine(frame: String, tab: String, category: String): String =
-        "$frame\t${clean(tab)}\t${clean(category)}\n"
+    data class FrameInfo(val tab: String, val category: String, val collected: Boolean)
 
-    /** frame name (e.g. frame_0001) → (tab, category). */
-    fun parseFrameIndex(text: String): Map<String, Pair<String, String>> =
+    fun frameIndexLine(frame: String, tab: String, category: String, collected: Boolean): String =
+        "$frame\t${clean(tab)}\t${clean(category)}\t${if (collected) 1 else 0}\n"
+
+    /** frame name (e.g. frame_0001) → where it was read. Older sessions have no collected column: all count. */
+    fun parseFrameIndex(text: String): Map<String, FrameInfo> =
         text.lineSequence()
             .filter { it.isNotBlank() }
             .map { it.split('\t') }
             .filter { it.size >= 3 }
-            .associate { it[0] to (it[1] to it[2]) }
+            .associate { it[0] to FrameInfo(it[1], it[2], it.getOrNull(3) != "0") }
 
     fun candidatesTsv(candidates: List<ScanCandidate>): String =
         candidates.joinToString("\n", postfix = "\n") { candidate ->

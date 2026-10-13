@@ -227,7 +227,7 @@ class ScanCoordinator(
                 File(dir, "$name.jpg").outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, 90, it) }
                 File(dir, "$name.tsv").writeText(ScanDebugFiles.frameTsv(boxes))
                 File(dir, ScanDebugFiles.FrameIndex).appendText(
-                    ScanDebugFiles.frameIndexLine(name, progress.tab.orEmpty(), progress.category.orEmpty()),
+                    ScanDebugFiles.frameIndexLine(name, progress.tab.orEmpty(), progress.category.orEmpty(), progress.collecting),
                 )
             }
         }

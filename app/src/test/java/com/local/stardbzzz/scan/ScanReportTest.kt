@@ -209,6 +209,21 @@ class ScanReportTest {
         assertEquals(4, report.localCompletedAfterSync)
     }
 
+    @Test
+    fun countsSameNameUnmatchedRowsWithDifferentDescriptionsSeparately() {
+        val observed = listOf(
+            ObservedRow("探索", "空洞探索指南", "没有收录的成就", "救出所有走失的邦布商人。", RowStatus.Completed(null)),
+            // The same row on the next page, its description read slightly differently.
+            ObservedRow("探索", "空洞探索指南", "没有收录的成就", "救出所有走失的邦布商。", RowStatus.Completed(null)),
+            ObservedRow("探索", "空洞探索指南", "没有收录的成就", "在其他关卡中完成挑战。", RowStatus.Completed(null)),
+        )
+
+        val report = ScanReportBuilder.build(observed, candidates, gameCompletedCount = null)
+
+        assertEquals(2, report.unmatched.size)
+        assertEquals(2, report.gameCompletedSeen)
+    }
+
     private fun candidate(id: String, name: String, description: String, category: String, completed: Boolean = false) =
         ScanCandidate(id, name, description, category, completed)
 }

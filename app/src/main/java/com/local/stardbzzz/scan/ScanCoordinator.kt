@@ -167,9 +167,16 @@ class ScanCoordinator(
     suspend fun apply(diffs: List<ScanDiff>) {
         repository.applyScannedCompletion(diffs.associate { it.id to it.markCompleted })
         val applied = diffs.map { it.id }.toSet()
-        _lastReport.value = _lastReport.value?.let { report ->
-            report.copy(diffs = report.diffs.filterNot { it.id in applied })
-        }
+        val completedDelta = diffs.count { it.markCompleted } - diffs.count { !it.markCompleted }
+        val updated = _lastReport.value?.let { report ->
+            report.copy(
+                localCompletedCount = report.localCompletedCount + completedDelta,
+                diffs = report.diffs.filterNot { it.id in applied },
+            )
+        } ?: return
+        _lastReport.value = updated
+        // The overlay shows the difference count from the finished state; keep it in step.
+        _state.update { current -> if (current is ScanState.Finished) ScanState.Finished(updated) else current }
     }
 
     @Synchronized

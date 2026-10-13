@@ -67,12 +67,12 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
         dispatchOrFail(Path().apply { moveTo(startX, startY); lineTo(endX, endY) }, durationMillis.coerceAtLeast(1))
     }
 
-    /** A gesture the system cancelled (usually because the screen was touched) would desync the scan, so stop it. */
+    /**
+     * A gesture the system cancelled (usually because the screen was touched) means the page may have
+     * changed under the scan; retrying could attribute rows to the wrong category, so stop instead.
+     */
     private suspend fun dispatchOrFail(path: Path, durationMillis: Long) {
-        repeat(GestureAttempts) {
-            if (dispatch(path, durationMillis)) return
-        }
-        throw IllegalStateException("自动操作被系统取消，扫描期间请不要触碰屏幕")
+        if (!dispatch(path, durationMillis)) throw IllegalStateException("自动操作被系统取消，扫描期间请不要触碰屏幕")
     }
 
     private fun toPixels(point: ScreenPoint): Pair<Float, Float> {
@@ -216,6 +216,5 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
 
     private companion object {
         const val TapMillis = 60L
-        const val GestureAttempts = 2
     }
 }

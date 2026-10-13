@@ -131,6 +131,18 @@ class GameScreenParserTest {
         assertEquals(0.88f, screen.tabs.getValue("探索").x, 0.01f)
     }
 
+    @Test
+    fun oneNearMatchCannotStandForTwoTabs() {
+        // 故市 is one character off both 故事 and 城市; it may fill only one of them.
+        val boxes = loadFixture("mlkit-story-frame2")
+            .filterNot { it.text == "城市" }
+            .map { if (it.text == "故事") it.copy(text = "故市") else it }
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(3, screen.tabs.size)
+    }
+
     private fun loadFixture(name: String): List<OcrBox> {
         val stream = javaClass.classLoader!!.getResourceAsStream("ocr/$name.tsv")
         return stream.bufferedReader().readLines()

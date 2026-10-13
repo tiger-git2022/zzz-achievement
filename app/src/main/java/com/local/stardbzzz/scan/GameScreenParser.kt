@@ -86,15 +86,19 @@ object GameScreenParser {
         val tabs = linkedMapOf<String, ScreenPoint>()
         // The tab bar starts at ~0.43 of the width; the scan overlay sits left of it.
         val bar = boxes.filter { it.centerY < 0.12f && it.centerX > 0.45f }
+        // Characters already taken by a tab, so one read can't stand for two tabs (故市 ≈ 故事 and 城市).
+        val claimed = bar.map { BooleanArray(it.text.length) }
         // Exact names first; then, for any still missing, a read with one of its two characters wrong
-        // (ML Kit reads 探索 as 採索 on every frame of one phone). The four names share no character.
+        // (ML Kit reads 探索 as 採索 on every frame of one phone).
         for (exact in listOf(true, false)) {
-            bar.forEach { box ->
+            bar.forEachIndexed { boxIndex, box ->
                 // The tabs may come back as one merged line; place each name proportionally inside the box.
                 val text = box.text
                 TabNames.forEach { name ->
-                    val index = if (exact) text.indexOf(name) else nearMatchIndex(text, name)
-                    if (index >= 0 && name !in tabs) {
+                    if (name in tabs) return@forEach
+                    val index = findName(text, name, claimed[boxIndex], exact)
+                    if (index >= 0) {
+                        name.indices.forEach { claimed[boxIndex][index + it] = true }
                         val fraction = (index + name.length / 2f) / text.length
                         tabs[name] = ScreenPoint(box.left + (box.right - box.left) * fraction, box.centerY)
                     }
@@ -104,10 +108,12 @@ object GameScreenParser {
         return tabs
     }
 
-    /** Start of the first window of [text] matching [name] in all but one character, or -1. */
-    private fun nearMatchIndex(text: String, name: String): Int =
+    /** Start of the first unclaimed window of [text] matching [name] exactly, or in all but one character. */
+    private fun findName(text: String, name: String, claimed: BooleanArray, exact: Boolean): Int =
         (0..text.length - name.length).firstOrNull { start ->
-            name.indices.count { text[start + it] == name[it] } >= name.length - 1
+            val free = name.indices.none { claimed[start + it] }
+            val same = name.indices.count { text[start + it] == name[it] }
+            free && same >= if (exact) name.length else name.length - 1
         } ?: -1
 
     private fun findCompletedCount(boxes: List<OcrBox>): Int? {

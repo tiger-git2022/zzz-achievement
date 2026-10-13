@@ -87,19 +87,20 @@ class AchievementPageScanner(
 
         val visited = mutableListOf<String>()
         var sidebarScrolls = 0
+        var readsWithoutNewCategory = 0
         while (visited.size < MaxCategoriesPerTab) {
             val page = readPage()
             val next = page.sidebar.firstOrNull { label -> visited.none { isSameLabel(it, label.text) } }
             if (next == null) {
-                // Every visible category is done: scroll the sidebar to reveal the rest.
-                if (sidebarScrolls >= MaxSidebarScrolls) return
+                // Every visible category is done: scroll the sidebar to reveal the rest. Only give up after
+                // several reads in a row show nothing new, so one incomplete OCR read can't end the tab early.
+                if (++readsWithoutNewCategory > StableReads || sidebarScrolls >= MaxSidebarScrolls) return
                 sidebarScrolls++
                 input.swipe(SidebarSwipeFrom, SidebarSwipeTo, timings.swipeMillis)
                 delay(timings.afterSwipeMillis)
-                val revealed = readPage().sidebar
-                if (revealed.all { label -> visited.any { isSameLabel(it, label.text) } }) return
                 continue
             }
+            readsWithoutNewCategory = 0
             visited += next.text
             currentCategory = next.text
             report()
@@ -177,7 +178,7 @@ class AchievementPageScanner(
 
     companion object {
         private const val MaxCategoriesPerTab = 30
-        private const val MaxSidebarScrolls = 6
+        private const val MaxSidebarScrolls = 12
         private const val MaxPagesPerCategory = 120
         private const val PageReadAttempts = 3
         private const val StableReads = 2

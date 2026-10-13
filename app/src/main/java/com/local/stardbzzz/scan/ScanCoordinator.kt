@@ -100,6 +100,8 @@ class ScanCoordinator(
             return
         }
         if (job?.isActive == true) return
+        // A report from an earlier run must not be applied as if it came from this one.
+        _lastReport.value = null
         _state.value = ScanState.Running(ScanProgress(null, null, 0, 0))
         job = scope.launch {
             val recognizer = MlKitTextRecognizer()

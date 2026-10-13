@@ -43,6 +43,23 @@ class AchievementPageScannerTest {
         assertEquals(4 * 9 * 8, capture.rows.map { it.name }.toSet().size)
     }
 
+    @Test
+    fun oneEmptySidebarReadDoesNotEndTheTab() = runBlocking {
+        val game = FakeGame(
+            mapOf(
+                "故事" to (1..9).map { c -> "故事分类$c" to rows("故事$c", 2) },
+                "城市" to listOf("城市分类" to rows("城市", 2)),
+                "战术" to listOf("战术分类" to rows("战术", 2)),
+                "探索" to listOf("探索分类" to rows("探索", 2)),
+            ),
+            dropSidebarAfterSidebarSwipe = true,
+        )
+
+        val capture = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0)).scan()
+
+        assertEquals(12, capture.rows.map { it.category }.toSet().size)
+    }
+
     @Test(expected = MissingTabsException::class)
     fun failsInsteadOfSkippingAnUnreadableTab() {
         runBlocking {
@@ -65,7 +82,11 @@ class AchievementPageScannerTest {
     private class FakeGame(
         val tabs: Map<String, List<Pair<String, List<String>>>>,
         startAtBottom: Boolean = false,
+        /** Simulates one OCR read that misses the sidebar right after it first scrolls. */
+        private val dropSidebarAfterSidebarSwipe: Boolean = false,
     ) : ScreenReader, GestureInput {
+        private var hideSidebarOnNextRead = false
+        private var droppedSidebar = false
         private var tab = tabs.keys.firstOrNull()
         private var category = 0
 
@@ -102,7 +123,9 @@ class AchievementPageScannerTest {
                 val x = 0.50f + index * 0.125f
                 boxes += OcrBox(name, x, 0.04f, x + 0.03f, 0.08f)
             }
-            categories.drop(sidebarOffset).take(VisibleLabels).forEachIndexed { index, (name, _) ->
+            val showSidebar = !hideSidebarOnNextRead
+            hideSidebarOnNextRead = false
+            if (showSidebar) categories.drop(sidebarOffset).take(VisibleLabels).forEachIndexed { index, (name, _) ->
                 val y = 0.35f + index * 0.0845f
                 boxes += OcrBox(name, 0.11f, y - 0.015f, 0.18f, y + 0.015f)
             }
@@ -129,6 +152,10 @@ class AchievementPageScannerTest {
             if (from.x < 0.25f) {
                 val max = (categories.size - VisibleLabels).coerceAtLeast(0)
                 sidebarOffset = (sidebarOffset + if (forward) 3 else -3).coerceIn(0, max)
+                if (forward && dropSidebarAfterSidebarSwipe && !droppedSidebar) {
+                    hideSidebarOnNextRead = true
+                    droppedSidebar = true
+                }
             } else {
                 val max = (rowsInCategory.size - VisibleRows).coerceAtLeast(0)
                 listOffset = (listOffset + if (forward) 3 else -3).coerceIn(0, max)

@@ -171,7 +171,31 @@ class AppUpdater(context: Context) {
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 
+    /**
+     * The manifest CI attaches to every release, served like any release download; api.github.com allows
+     * 60 requests an hour per IP without login, which shared mobile-network IPs often use up (HTTP 403).
+     * Releases from before the manifest existed fall back to the API.
+     */
     private suspend fun fetchLatestRelease(): ReleaseInfo = withContext(Dispatchers.IO) {
+        fetchUpdateManifest() ?: fetchFromApi()
+    }
+
+    private fun fetchUpdateManifest(): ReleaseInfo? {
+        val request = Request.Builder()
+            .url(UpdateManifestUrl)
+            .header("User-Agent", "zzz-achievement/$currentVersionName")
+            .build()
+        val body = client.newCall(request).execute().use { response ->
+            when {
+                response.code == 404 -> return null
+                !response.isSuccessful -> throw IOException("HTTP ${response.code}")
+            }
+            response.body?.string() ?: throw IOException("响应为空")
+        }
+        return parseUpdateManifest(body)
+    }
+
+    private fun fetchFromApi(): ReleaseInfo {
         val request = Request.Builder()
             .url(LatestReleaseUrl)
             .header("Accept", "application/vnd.github+json")
@@ -181,17 +205,18 @@ class AppUpdater(context: Context) {
         val body = client.newCall(request).execute().use { response ->
             when {
                 response.code == 404 -> throw IOException("还没有发布版本")
+                (response.code == 403 || response.code == 429) && response.header("x-ratelimit-remaining") == "0" ->
+                    throw IOException("GitHub 访问次数已用完（同一网络每小时 60 次），请过一会儿再试")
                 !response.isSuccessful -> throw IOException("HTTP ${response.code}")
             }
             response.body?.string() ?: throw IOException("响应为空")
         }
-        parseRelease(JSONObject(body))
+        return parseRelease(JSONObject(body))
     }
 
     private fun parseRelease(json: JSONObject): ReleaseInfo {
         val tagName = json.getString("tag_name")
-        val buildNumber = TagPattern.matchEntire(tagName)?.groupValues?.get(1)?.toIntOrNull()
-            ?: throw IOException("无法识别版本号 $tagName")
+        val buildNumber = buildNumberOf(tagName)
         val assets = json.optJSONArray("assets")
         val apkAsset = (0 until (assets?.length() ?: 0))
             .map { assets!!.getJSONObject(it) }
@@ -276,11 +301,33 @@ class AppUpdater(context: Context) {
 
     private fun JSONObject.stringOrEmpty(name: String): String = if (isNull(name)) "" else optString(name)
 
-    private companion object {
-        const val LatestReleaseUrl = "https://api.github.com/repos/tiger-git2022/zzz-achievement/releases/latest"
-        const val AutoCheckIntervalMillis = 24 * 60 * 60 * 1000L
-        const val KeyLastCheck = "last_check_epoch_millis"
-        const val KeyIgnoredBuild = "ignored_build_number"
-        val TagPattern = Regex("""v?\d+\.\d+\.(\d+)""")
+    internal companion object {
+        private const val Repository = "https://github.com/tiger-git2022/zzz-achievement"
+        private const val UpdateManifestUrl = "$Repository/releases/latest/download/update.json"
+        private const val LatestReleaseUrl = "https://api.github.com/repos/tiger-git2022/zzz-achievement/releases/latest"
+        private const val AutoCheckIntervalMillis = 24 * 60 * 60 * 1000L
+        private const val KeyLastCheck = "last_check_epoch_millis"
+        private const val KeyIgnoredBuild = "ignored_build_number"
+        private val TagPattern = Regex("""v?\d+\.\d+\.(\d+)""")
+
+        /** update.json: {"tag_name", "body", "apk": {"name", "size", "sha256"}}, written by the release workflow. */
+        fun parseUpdateManifest(body: String): ReleaseInfo {
+            val json = JSONObject(body)
+            val tagName = json.getString("tag_name")
+            val apk = json.getJSONObject("apk")
+            val name = apk.getString("name")
+            return ReleaseInfo(
+                tagName = tagName,
+                buildNumber = buildNumberOf(tagName),
+                notes = json.optString("body").trim(),
+                apkUrl = "$Repository/releases/download/$tagName/$name",
+                apkSize = apk.optLong("size", -1L),
+                apkSha256 = apk.optString("sha256").takeIf { it.length == 64 }?.lowercase(),
+            )
+        }
+
+        fun buildNumberOf(tagName: String): Int =
+            TagPattern.matchEntire(tagName)?.groupValues?.get(1)?.toIntOrNull()
+                ?: throw IOException("无法识别版本号 $tagName")
     }
 }

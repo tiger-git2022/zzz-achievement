@@ -152,7 +152,7 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
         private val GenderVariantRegex = Regex("""\{M#([^{}]*)\}\{F#([^{}]*)\}""", RegexOption.IGNORE_CASE)
 
         /**
-         * Characters ML Kit reads in place of the game's simplified Chinese: traditional or variant forms and
+         * Characters OCR reads in place of the game's simplified Chinese: traditional or variant forms and
          * look-alikes seen on a real phone (採索 for 探索, 斷金製石 for 断金裂石, カ for 力). Both sides of every
          * comparison go through this, so mapping a real character too only matters if two achievements
          * differed by exactly that character.

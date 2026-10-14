@@ -1,7 +1,7 @@
-"""Re-OCR a debug scan session's frames with PaddleOCR (PP-OCRv5 mobile on ONNX Runtime, via RapidOCR).
+"""Re-OCR a debug scan session's frames with PaddleOCR models on ONNX Runtime, via RapidOCR.
 
 For every frame_NNNN.jpg in the session folder this writes frame_NNNN.paddle.tsv in the same format as the
-app's ML Kit output (frame_NNNN.tsv), so ScanReplayTest can build a report from either engine:
+app's own OCR output (frame_NNNN.tsv), so ScanReplayTest can build a report from either:
 
     pip install "rapidocr>=3.4" onnxruntime pillow
     python paddle_ocr.py "C:\\...\\scan-debug\\20261014-032011"

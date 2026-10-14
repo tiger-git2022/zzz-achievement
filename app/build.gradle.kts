@@ -27,6 +27,9 @@ android {
         versionCode = if (buildNumber > 0) 100 + buildNumber else 2
         versionName = if (buildNumber > 0) "$baseVersionName.$buildNumber" else baseVersionName
         buildConfigField("int", "BUILD_NUMBER", buildNumber.toString())
+
+        // The OCR runtime (ONNX Runtime) is ~20 MB of native code per ABI; 64-bit ARM covers current phones.
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     signingConfigs {
@@ -102,8 +105,10 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp-urlconnection:4.12.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
 
-    // On-device Chinese OCR for the in-game achievement scan; the model is bundled, no Play services needed.
-    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    // On-device OCR for the in-game achievement scan: PaddleOCR models (assets/ppocr) on ONNX Runtime.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.29.0")
 
     testImplementation("junit:junit:4.13.2")
+    // Same API with desktop native libraries, so unit tests can run the bundled models.
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.29.0")
 }

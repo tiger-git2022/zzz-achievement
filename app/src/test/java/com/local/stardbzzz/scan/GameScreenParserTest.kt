@@ -237,6 +237,32 @@ class GameScreenParserTest {
         assertEquals(RowStatus.Completed("2026-10-01"), screen.rows.last().status)
     }
 
+    @Test
+    fun parsesThePaddleOcrReadOfACityPage() {
+        val screen = GameScreenParser.parse(loadFixture("paddle-city"))
+
+        assertEquals(GameScreenParser.TabNames.toSet(), screen.tabs.keys)
+        assertEquals(631, screen.completedCount)
+        assertEquals(
+            listOf("绳匠业务", "雅努斯区", "卫非地", "外环地带", "索恩区", "罗斯凯利法"),
+            screen.sidebar.map { it.text },
+        )
+        assertEquals(
+            listOf(
+                GameRow("LV60，恭迎王的回归", "绳网等级达到60级。", RowStatus.InProgress(57, 60)),
+                GameRow(
+                    "「德丰大押」荣誉顾客",
+                    "在「德丰大押』中，用云纹徽兑换[鹤唳天青]、[翠影朱绾]和[柠火溯流]。",
+                    RowStatus.InProgress(2, 3),
+                ),
+                GameRow("潮头浪尖", "收集6套主题和挂坠。", RowStatus.InProgress(7, 12)),
+                GameRow("精选帖核心受众", "在绳网上阅读并回复10条『Fairy精选』帖子。", RowStatus.InProgress(3, 10)),
+                GameRow("少女神明的七日箱庭", "通过[调整时段]功能，累计推移28个时段。", RowStatus.Completed("2026-06-26")),
+            ),
+            screen.rows,
+        )
+    }
+
     /** Space-separated "left top right bottom text" lines, as in the round-two notes. */
     private fun boxes(lines: String): List<OcrBox> =
         lines.trimIndent().lines().filter { it.isNotBlank() }.map { line ->

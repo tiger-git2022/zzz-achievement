@@ -106,10 +106,11 @@ class ScanCoordinator(
         _lastReport.value = null
         _state.value = ScanState.Running(ScanProgress(null, null, 0, 0))
         job = scope.launch {
-            val recognizer = MlKitTextRecognizer()
+            var recognizer: PaddleTextRecognizer? = null
             try {
                 val candidates = repository.scanCandidates()
                 require(candidates.isNotEmpty()) { "本地还没有成就数据，请先在 App 里登录并刷新" }
+                val ocr = PaddleTextRecognizer.create(appContext).also { recognizer = it }
                 // A panel dragged over the tab bar while Ready moves back to its spot once Running; let it.
                 delay(OverlaySettleMillis)
                 val debug = if (_saveDebugFrames.value) DebugFrameWriter(debugDirectory) else null
@@ -120,7 +121,7 @@ class ScanCoordinator(
                     val frame = screen.capture()
                     val scaled = scaleForOcr(frame)
                     try {
-                        recognizer.recognize(scaled).also { boxes -> debug?.write(scaled, boxes, progress) }
+                        ocr.recognize(scaled).also { boxes -> debug?.write(scaled, boxes, progress) }
                     } finally {
                         if (scaled !== frame) scaled.recycle()
                     }
@@ -144,7 +145,7 @@ class ScanCoordinator(
             } catch (failure: Exception) {
                 _state.value = ScanState.Failed(failure.message ?: failure.javaClass.simpleName)
             } finally {
-                recognizer.close()
+                recognizer?.close()
             }
         }
     }
@@ -207,7 +208,8 @@ class ScanCoordinator(
 
     /**
      * Only very large frames are shrunk. On a 3168px-wide phone, shrinking to 1600px left achievement names
-     * about 20px tall and ML Kit misread characters (叩 → D/号) on every other frame.
+     * about 20px tall and the previous OCR (ML Kit) misread characters (叩 → D/号) on every other frame.
+     * PaddleOcr shrinks the frame itself for detection but reads each line from the full-size frame.
      */
     private fun scaleForOcr(frame: Bitmap): Bitmap {
         if (frame.width <= OcrMaxWidth) return frame

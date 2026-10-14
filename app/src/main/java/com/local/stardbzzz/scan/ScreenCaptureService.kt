@@ -122,7 +122,7 @@ class ProjectionScreenCapture(
     private val thread = HandlerThread("screen-capture").apply { start() }
     private val handler = Handler(thread.looper)
     private val lock = Any()
-    private var reader: ImageReader? = null
+    private var reader: ImageReader? = null // guarded by lock
     private var virtualDisplay: VirtualDisplay? = null
     private var size = Point()
     private var latestImage: Image? = null // guarded by lock
@@ -153,11 +153,15 @@ class ProjectionScreenCapture(
         repeat(FrameWaitAttempts) {
             val image = synchronized(lock) { latestImage.also { latestImage = null } }
             if (image != null) {
-                lastFrame = try {
+                // An image its reader closed meanwhile (a rotation switched readers) is no frame; wait for the next.
+                val frame = try {
                     image.toBitmap()
+                } catch (closed: IllegalStateException) {
+                    null
                 } finally {
                     image.close()
                 }
+                if (frame != null) lastFrame = frame
             }
             // No new frame means the screen hasn't changed since the last one.
             lastFrame?.let { return it }
@@ -170,12 +174,12 @@ class ProjectionScreenCapture(
         projection.unregisterCallback(callback)
         virtualDisplay?.release()
         virtualDisplay = null
-        synchronized(lock) {
+        val oldReader = synchronized(lock) {
             latestImage?.close()
             latestImage = null
+            reader.also { reader = null }
         }
-        reader?.close()
-        reader = null
+        oldReader?.close()
         projection.stop()
         thread.quitSafely()
     }
@@ -190,6 +194,11 @@ class ProjectionScreenCapture(
         newReader.setOnImageAvailableListener({ source ->
             val image = runCatching { source.acquireLatestImage() }.getOrNull() ?: return@setOnImageAvailableListener
             synchronized(lock) {
+                // A frame the replaced reader delivered after the switch would be closed along with that reader.
+                if (source !== reader) {
+                    image.close()
+                    return@synchronized
+                }
                 latestImage?.close()
                 latestImage = image
             }
@@ -212,12 +221,14 @@ class ProjectionScreenCapture(
             display.resize(real.x, real.y, densityDpi)
             display.surface = newReader.surface
         }
-        synchronized(lock) {
+        // Switch readers under the lock, so the old one's last frames are dropped rather than handed out after
+        // it closes them ("Image is already closed" on the first capture after creating the display in portrait).
+        val oldReader = synchronized(lock) {
             latestImage?.close()
             latestImage = null
+            reader.also { reader = newReader }
         }
-        reader?.close()
-        reader = newReader
+        oldReader?.close()
         lastFrame = null
         size = real
     }

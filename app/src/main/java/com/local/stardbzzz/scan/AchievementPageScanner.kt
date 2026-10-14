@@ -9,7 +9,8 @@ import kotlinx.coroutines.launch
 /** Injects touches at normalized screen positions. */
 interface GestureInput {
     suspend fun tap(point: ScreenPoint)
-    suspend fun swipe(from: ScreenPoint, to: ScreenPoint, durationMillis: Long)
+    /** With [holdMillis], the finger rests on [to] that long before lifting, so the list doesn't fling on. */
+    suspend fun swipe(from: ScreenPoint, to: ScreenPoint, durationMillis: Long, holdMillis: Long = 0)
 }
 
 data class ScanTimings(
@@ -18,6 +19,11 @@ data class ScanTimings(
     val afterSwipeMillis: Long = 1_000,
     val swipeMillis: Long = 700,
     val flingMillis: Long = 150,
+    /**
+     * How long a page-by-page swipe rests on its end point before lifting. Released while still moving, the list
+     * flung on by a varying amount: on the phone one swipe moved eight rows instead of three and skipped three.
+     */
+    val holdMillis: Long = 200,
     /** After a list swipe or a category tap: wait this long, then until two captures this far apart match. */
     val settleMinMillis: Long = 250,
     val settlePollMillis: Long = 120,
@@ -25,7 +31,7 @@ data class ScanTimings(
 ) {
     companion object {
         /** For tests: no waiting at all. */
-        val None = ScanTimings(0, 0, 0, 0, 0, 0, 0)
+        val None = ScanTimings(0, 0, 0, 0, 0, 0, 0, 0)
     }
 }
 
@@ -158,7 +164,7 @@ class AchievementPageScanner(
                 // several reads in a row show nothing new, so one incomplete OCR read can't end the tab early.
                 if (++readsWithoutNewCategory > StableReads || sidebarScrolls >= MaxSidebarScrolls) return
                 sidebarScrolls++
-                input.swipe(SidebarSwipeFrom, SidebarSwipeTo, timings.swipeMillis)
+                input.swipe(SidebarSwipeFrom, SidebarSwipeTo, timings.swipeMillis, timings.holdMillis)
                 delay(timings.afterSwipeMillis)
                 continue
             }
@@ -206,7 +212,7 @@ class AchievementPageScanner(
         enqueue(page, tab, category, queue)
         unchanged = 0
         for (step in 1 until MaxPagesPerCategory) {
-            input.swipe(ListSwipeFrom, ListSwipeTo, timings.swipeMillis)
+            input.swipe(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, timings.holdMillis)
             val next = settle()
             // A page that didn't move holds nothing new; requiring it twice keeps one swipe the game dropped
             // from ending the list early.

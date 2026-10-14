@@ -107,6 +107,9 @@ class ScanCoordinator(
         _state.value = ScanState.Running(ScanProgress(null, null, 0, 0))
         job = scope.launch {
             var recognizer: PaddleTextRecognizer? = null
+            // A shrunk copy of the last frame (screens wider than OcrMaxWidth), owned here; the capture's own
+            // frame isn't. A frame is only used until the next capture, so each copy is recycled then.
+            var shrunk: Bitmap? = null
             val queueDirectory = File(appContext.cacheDir, QueueDirectory).apply { deleteRecursively() }
             try {
                 val candidates = repository.scanCandidates()
@@ -118,7 +121,12 @@ class ScanCoordinator(
                 val debug = if (_saveDebugFrames.value) DebugFrameWriter(debugDirectory) { progress } else null
                 debug?.writeCandidates(candidates)
                 val listInfo = repository.achievementListInfo()
-                val source = CapturedScreenSource({ scaleForOcr(screen.capture()) }, ocr, queueDirectory, debug)
+                val grab: suspend () -> Bitmap = {
+                    val frame = screen.capture()
+                    shrunk?.recycle()
+                    scaleForOcr(frame).also { shrunk = it.takeIf { copy -> copy !== frame } }
+                }
+                val source = CapturedScreenSource(grab, ocr, queueDirectory, debug)
                 val result = AchievementPageScanner(source, gestures) { update ->
                     progress = update
                     _state.value = ScanState.Running(update)
@@ -143,6 +151,7 @@ class ScanCoordinator(
             } finally {
                 recognizer?.close()
                 queueDirectory.deleteRecursively()
+                shrunk?.recycle()
             }
         }
     }

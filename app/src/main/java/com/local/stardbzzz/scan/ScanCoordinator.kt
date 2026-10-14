@@ -142,6 +142,9 @@ class ScanCoordinator(
                     else ScanState.Idle
                 }
                 throw cancelled
+            } catch (expired: SecurityException) {
+                // MediaProjection's own message is a long English paragraph that overflows the overlay.
+                _state.value = ScanState.Failed("屏幕录制授权已失效，请回到 App 重新授权屏幕录制")
             } catch (failure: Exception) {
                 _state.value = ScanState.Failed(failure.message ?: failure.javaClass.simpleName)
             } finally {

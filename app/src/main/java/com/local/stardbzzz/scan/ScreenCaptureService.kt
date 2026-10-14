@@ -51,8 +51,17 @@ class ScreenCaptureService : Service() {
             return START_NOT_STICKY
         }
 
-        capture?.release()
-        capture = ProjectionScreenCapture(this, projection) { stopSelf() }.also(coordinator::attachCapture)
+        capture?.let {
+            coordinator.detachCapture(it)
+            it.release()
+        }
+        capture = null
+        try {
+            capture = ProjectionScreenCapture(this, projection) { stopSelf() }.also(coordinator::attachCapture)
+        } catch (expired: SecurityException) {
+            // The grant is no longer usable; the scan screen stays at 授权屏幕录制.
+            stopSelf()
+        }
         return START_NOT_STICKY
     }
 
@@ -126,6 +135,14 @@ class ProjectionScreenCapture(
     init {
         // Android 14+ requires a registered callback before createVirtualDisplay().
         projection.registerCallback(callback, handler)
+        // Android 14+ also expires a projection that hasn't created its VirtualDisplay within a few minutes of
+        // the grant. Waiting for 开始 to create it failed scans started more than a few minutes after granting.
+        try {
+            ensureDisplay()
+        } catch (failure: RuntimeException) {
+            release()
+            throw failure
+        }
     }
 
     /** The real display size in the current rotation; gestures use the same coordinate space. */

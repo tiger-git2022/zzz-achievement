@@ -171,6 +171,9 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
             '濱' to '滨',
             '慣' to '愤',
             'カ' to '力',
+            // PaddleOCR on a real phone: 小心別薅禿了 for 小心别薅秃了.
+            '別' to '别',
+            '禿' to '秃',
         )
 
         /**

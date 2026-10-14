@@ -137,6 +137,7 @@ class ScanReportTest {
                 candidate("w3", "树间所遗忘的", "", "外环地带"),
                 candidate("w4", "小心别购秀了", "", "代理人秘闻"),
                 candidate("w5", "核心力量训练", "", "绳匠业务"),
+                candidate("w6", "小心别薅秃了", "在录像店内，累计抚摸小黑3次。", "代理人信赖"),
             ),
         )
 
@@ -145,6 +146,8 @@ class ScanReportTest {
         assertEquals("w3", readings.match("樹间所遗忘的", "", null)?.id)
         assertEquals("w4", readings.match("小心别購秀了", "", null)?.id)
         assertEquals("w5", readings.match("核心カ量训练", "", null)?.id)
+        // PaddleOCR: 別/禿 for 别/秃.
+        assertEquals("w6", readings.match("小心別薅禿了", "在录像店内，累计抚摸小黑3次。", "代理人信赖")?.id)
     }
 
     @Test

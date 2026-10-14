@@ -93,9 +93,8 @@ data class AchievementDto(
     val displayOrder: Int = 0,
     val completed: Boolean = false,
     /**
-     * Marked completed only because stardb's group holding it has another member completed: the tracker sets
-     * one `complete` per achievement group and every member is shown completed. Counted to diagnose local
-     * completion totals that run above the game's.
+     * Not completed itself, but another member of its stardb group is: a group lists alternative story-branch
+     * achievements and its `complete` names the one completed. Counted for the scan report.
      */
     val completedViaGroup: Boolean = false,
 )

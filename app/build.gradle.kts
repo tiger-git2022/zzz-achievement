@@ -111,4 +111,6 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // Same API with desktop native libraries, so unit tests can run the bundled models.
     testImplementation("com.microsoft.onnxruntime:onnxruntime:1.29.0")
+    // android.jar only has stubs of org.json; the stardb data parser tests need the real thing.
+    testImplementation("org.json:json:20240303")
 }

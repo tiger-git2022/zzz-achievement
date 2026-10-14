@@ -123,12 +123,6 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
                                     color = MaterialTheme.colorScheme.error,
                                 )
                             }
-                            listInfo?.completedViaGroup?.takeIf { it > 0 }?.let { count ->
-                                Text(
-                                    "其中 $count 条在 stardb 里只是因为同组另一个成就完成才显示为已完成，本地完成数可能因此比游戏多。",
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
                         }
                     },
                     trailingContent = {

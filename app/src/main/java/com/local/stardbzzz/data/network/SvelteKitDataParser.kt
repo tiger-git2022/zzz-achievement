@@ -149,7 +149,8 @@ private fun Map<*, *>.toAchievements(): List<AchievementDto> {
                     reward = achievement["currency"]?.toString().orEmpty(),
                     version = achievement["version"]?.toString().orEmpty(),
                     displayOrder = order++,
-                    completed = completeId != null,
+                    // A group lists alternative achievements (story branches); stardb records the one completed.
+                    completed = completeId != null && sameId(completeId, id),
                     completedViaGroup = viaGroup,
                 )
             }
@@ -183,7 +184,8 @@ private fun JSONObject.toAchievements(): List<AchievementDto> {
                     reward = achievement.opt("currency")?.takeUnless { it == JSONObject.NULL }?.toString().orEmpty(),
                     version = achievement.optString("version"),
                     displayOrder = order++,
-                    completed = completeId != null,
+                    // A group lists alternative achievements (story branches); stardb records the one completed.
+                    completed = completeId != null && sameId(completeId, id),
                     completedViaGroup = viaGroup,
                 )
             }

@@ -200,11 +200,7 @@ class AchievementRepository(
     suspend fun toggleAchievement(id: String, completed: Boolean) {
         val selected = dao.getById(id) ?: return
         val linkedIds = dao.allSnapshot()
-            .filter { item ->
-                item.name == selected.name &&
-                    item.category == selected.category &&
-                    item.version == selected.version
-            }
+            .filter { it.isSameAchievementAs(selected) }
             .map { it.id }
         linkedIds.forEach(::retainVisibleAchievement)
         val now = System.currentTimeMillis()
@@ -242,11 +238,7 @@ class AchievementRepository(
         val now = System.currentTimeMillis()
         changes.forEach { (id, completed) ->
             val selected = byId[id] ?: return@forEach
-            all.filter { item ->
-                item.name == selected.name &&
-                    item.category == selected.category &&
-                    item.version == selected.version
-            }.forEach { linked ->
+            all.filter { it.isSameAchievementAs(selected) }.forEach { linked ->
                 dao.updateCompletion(linked.id, completed, SyncStatus.Pending, now)
             }
         }
@@ -298,11 +290,7 @@ class AchievementRepository(
         val current = dao.getById(pending.id) ?: return
         if (current.syncStatus == SyncStatus.Synced) return
         val linkedIds = dao.allSnapshot()
-            .filter { item ->
-                item.name == current.name &&
-                    item.category == current.category &&
-                    item.version == current.version
-            }
+            .filter { it.isSameAchievementAs(current) }
             .map { it.id }
         runCatching {
             loginWithSavedCredentialsIfNeeded()
@@ -331,6 +319,13 @@ class AchievementRepository(
             if (updated > 0 || failure is AuthenticationExpiredException) throw failure
         }
     }
+
+    /**
+     * Records of one achievement listed under several ids. Story-branch alternatives in a stardb group share
+     * their name, category and version but not their description, and each is completed on its own.
+     */
+    private fun AchievementEntity.isSameAchievementAs(other: AchievementEntity): Boolean =
+        name == other.name && category == other.category && version == other.version && description == other.description
 
     private fun Response<ResponseBody>.syncErrorMessage(completed: Boolean): String {
         val action = if (completed) "勾选同步" else "取消同步"

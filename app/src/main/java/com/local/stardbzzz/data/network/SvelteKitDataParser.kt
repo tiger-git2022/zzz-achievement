@@ -144,7 +144,7 @@ private fun Map<*, *>.toAchievements(): List<AchievementDto> {
                     id = id,
                     name = achievement["name"]?.toString().orEmpty(),
                     description = achievement["description"]?.toString().orEmpty(),
-                    primaryCategory = primaryCategory,
+                    primaryCategory = tabOfSeries(achievement["series"]?.toString()) ?: primaryCategory,
                     category = achievement["series_name"]?.toString().orEmpty().ifBlank { groupName },
                     reward = achievement["currency"]?.toString().orEmpty(),
                     version = achievement["version"]?.toString().orEmpty(),
@@ -179,7 +179,7 @@ private fun JSONObject.toAchievements(): List<AchievementDto> {
                     id = id,
                     name = achievement.optString("name"),
                     description = achievement.optString("description"),
-                    primaryCategory = primaryCategory,
+                    primaryCategory = tabOfSeries(achievement.opt("series")?.toString()) ?: primaryCategory,
                     category = achievement.optString("series_name").ifBlank { groupName },
                     reward = achievement.opt("currency")?.takeUnless { it == JSONObject.NULL }?.toString().orEmpty(),
                     version = achievement.optString("version"),
@@ -192,6 +192,20 @@ private fun JSONObject.toAchievements(): List<AchievementDto> {
         }
     }.distinctBy { it.id }
 }
+
+/**
+ * The in-game tab of a stardb series, from its number: 1xxx 故事, 2xxx 战术, 3xxx 探索, 4xxx 城市. stardb names only
+ * the series (the category), so the tab came from a fixed list of names, which put every category a game update
+ * added (罗斯凯利法, 迷宫诡域) under 其他. The arcade games are series 1 to 4 and aren't on the achievement page.
+ */
+internal fun tabOfSeries(series: String?): String? =
+    when (series?.toDoubleOrNull()?.toInt()?.div(1000)) {
+        1 -> "故事"
+        2 -> "战术"
+        3 -> "探索"
+        4 -> "城市"
+        else -> null
+    }
 
 /** Ids can come back as 4040123 or 4040123.0 depending on how the number was decoded. */
 private fun sameId(a: String, b: String): Boolean =

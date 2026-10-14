@@ -154,8 +154,8 @@ object GameScreenParser {
             .map { SidebarLabel(it.text.trim(), ScreenPoint(it.centerX, it.centerY)) }
 
     private fun findRows(boxes: List<OcrBox>): List<GameRow> {
-        val textColumn = boxes
-            .filter { it.left in 0.25f..0.45f && it.centerY in 0.2f..0.97f }
+        val textColumn = joinSplitLines(boxes.filter { it.centerX in 0.25f..0.75f && it.centerY in 0.2f..0.97f })
+            .filter { it.left in 0.25f..0.45f && it.right > MedalRight }
             .filterNot { ProgressLineRegex.matches(it.text.trim()) }
             .sortedBy { it.centerY }
         val statuses = boxes
@@ -176,7 +176,51 @@ object GameScreenParser {
         }
     }
 
+    /**
+     * Detection sometimes splits one line in two (累计200次， | 使用[以太]属性…), which dropped the tier's number from
+     * the description. Boxes on the same line that (nearly) touch are joined left to right; a reward count further
+     * right on the same line is a separate box and stays one.
+     */
+    private fun joinSplitLines(boxes: List<OcrBox>): List<OcrBox> {
+        val lines = mutableListOf<OcrBox>()
+        boxes.sortedBy { it.left }.forEach { box ->
+            val index = lines.indexOfFirst { line ->
+                box.left - line.right in -SplitLineOverlap..SplitLineGap && sameLine(line, box)
+            }
+            if (index < 0) {
+                lines += box
+            } else {
+                val line = lines[index]
+                lines[index] = OcrBox(
+                    text = line.text + box.text,
+                    left = line.left,
+                    top = minOf(line.top, box.top),
+                    right = maxOf(line.right, box.right),
+                    bottom = maxOf(line.bottom, box.bottom),
+                )
+            }
+        }
+        return lines
+    }
+
+    /**
+     * The two halves of a split line share their top and bottom edges. The row's medal (read as 西 or Z) sits
+     * half a line lower than the name, and the description a whole line lower.
+     */
+    private fun sameLine(a: OcrBox, b: OcrBox): Boolean {
+        val tolerance = SameLineTolerance * minOf(a.bottom - a.top, b.bottom - b.top)
+        return abs(a.top - b.top) <= tolerance && abs(a.bottom - b.bottom) <= tolerance
+    }
+
     private fun Char.isCjk(): Boolean = this in '一'..'鿿'
+
+    /** The split seen on a real frame left no gap (the boxes overlapped); a reward count sits ~0.15 further right. */
+    /** Each row's medal (0.257..0.277, read as 西 or Z) ends left of the text column, which starts at ~0.287. */
+    private const val MedalRight = 0.282f
+
+    private const val SplitLineGap = 0.02f
+    private const val SplitLineOverlap = 0.01f
+    private const val SameLineTolerance = 0.3f
 
     /** Rows are ~0.136 of the screen height apart; name and description sit within ±0.03 of the status. */
     private const val RowHalfHeight = 0.055f

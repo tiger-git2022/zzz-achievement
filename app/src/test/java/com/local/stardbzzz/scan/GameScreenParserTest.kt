@@ -238,6 +238,35 @@ class GameScreenParserTest {
     }
 
     @Test
+    fun joinsADescriptionSplitIntoTwoBoxes() {
+        // PaddleOCR on the phone, frame 206 of the second run: the tier's number ended up in a box of its own,
+        // and the row went unmatched. The reward count further right on the same line stays out.
+        val screen = GameScreenParser.parse(
+            boxes(
+                """
+                0.2895 0.6715 0.3561 0.7118 以为太难Ⅱ
+                0.8141 0.6917 0.8999 0.7271 2026年7月1日
+                0.2907 0.7063 0.5849 0.7437 累计50次，使用[以太]属性代理人使敌人陷入属性异常。
+                0.7468 0.7118 0.7639 0.7403 10
+                0.2904 0.8090 0.3573 0.8472 以为太难IⅢ
+                0.2566 0.8257 0.2771 0.8625 西
+                0.8141 0.8285 0.8999 0.8646 2026年7月5日
+                0.2907 0.8444 0.3617 0.8799 累计200次，
+                0.3598 0.8444 0.5919 0.8785 使用[以太]属性代理人使敌人陷入属性异常。
+                0.7478 0.8493 0.7642 0.8778 20
+                """,
+            ),
+        )
+
+        assertEquals(
+            listOf("累计50次，使用[以太]属性代理人使敌人陷入属性异常。", "累计200次，使用[以太]属性代理人使敌人陷入属性异常。"),
+            screen.rows.map { it.description },
+        )
+        // The row's medal, read as 西 half a line below the name, isn't joined to it.
+        assertEquals(listOf("以为太难Ⅱ", "以为太难IⅢ"), screen.rows.map { it.name })
+    }
+
+    @Test
     fun parsesThePaddleOcrReadOfACityPage() {
         val screen = GameScreenParser.parse(loadFixture("paddle-city"))
 

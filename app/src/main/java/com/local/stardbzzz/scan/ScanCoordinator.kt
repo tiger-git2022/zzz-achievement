@@ -2,12 +2,14 @@ package com.local.stardbzzz.scan
 
 import android.content.Context
 import android.graphics.Bitmap
+import com.local.stardbzzz.data.repository.AchievementListInfo
 import com.local.stardbzzz.data.repository.AchievementRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -104,24 +106,32 @@ class ScanCoordinator(
         _lastReport.value = null
         _state.value = ScanState.Running(ScanProgress(null, null, 0, 0))
         job = scope.launch {
-            val recognizer = MlKitTextRecognizer()
+            var recognizer: PaddleTextRecognizer? = null
             try {
                 val candidates = repository.scanCandidates()
                 require(candidates.isNotEmpty()) { "本地还没有成就数据，请先在 App 里登录并刷新" }
+                val ocr = PaddleTextRecognizer.create(appContext).also { recognizer = it }
+                // A panel dragged over the tab bar while Ready moves back to its spot once Running; let it.
+                delay(OverlaySettleMillis)
                 val debug = if (_saveDebugFrames.value) DebugFrameWriter(debugDirectory) else null
+                debug?.writeCandidates(candidates)
+                val listInfo = repository.achievementListInfo()
+                var progress = ScanProgress(null, null, 0, 0)
                 val reader = ScreenReader {
                     val frame = screen.capture()
                     val scaled = scaleForOcr(frame)
                     try {
-                        recognizer.recognize(scaled).also { boxes -> debug?.write(scaled, boxes) }
+                        ocr.recognize(scaled).also { boxes -> debug?.write(scaled, boxes, progress) }
                     } finally {
                         if (scaled !== frame) scaled.recycle()
                     }
                 }
-                val result = AchievementPageScanner(reader, gestures) { progress ->
-                    _state.value = ScanState.Running(progress)
+                val result = AchievementPageScanner(reader, gestures) { update ->
+                    progress = update
+                    _state.value = ScanState.Running(update)
                 }.scan()
                 val report = ScanReportBuilder.build(result.rows, candidates, result.gameCompletedCount)
+                debug?.writeReport(report, listInfo)
                 _lastReport.value = report
                 _state.value = ScanState.Finished(report)
             } catch (cancelled: CancellationException) {
@@ -135,7 +145,7 @@ class ScanCoordinator(
             } catch (failure: Exception) {
                 _state.value = ScanState.Failed(failure.message ?: failure.javaClass.simpleName)
             } finally {
-                recognizer.close()
+                recognizer?.close()
             }
         }
     }
@@ -149,6 +159,13 @@ class ScanCoordinator(
         job?.cancel()
         ScreenCaptureService.stop(appContext)
         _state.value = ScanState.Idle
+    }
+
+    suspend fun achievementListInfo(): AchievementListInfo = repository.achievementListInfo()
+
+    /** Re-downloads the achievement list from stardb, so newly added achievements can be matched. */
+    suspend fun refreshAchievementList() {
+        repository.refreshAchievements()
     }
 
     fun requestOpenScanScreen() {
@@ -168,10 +185,14 @@ class ScanCoordinator(
         repository.applyScannedCompletion(diffs.associate { it.id to it.markCompleted })
         val applied = diffs.map { it.id }.toSet()
         // One diff can update several linked records, so recount instead of adjusting by the diff count.
-        val localCompleted = repository.scanCandidates().count { it.isCompleted }
+        val candidates = repository.scanCandidates()
         val updated = _lastReport.value?.let { report ->
             report.copy(
-                localCompletedCount = localCompleted,
+                localCompletedCount = ScanReportBuilder.completedAchievements(candidates),
+                localCompletedRecords = candidates.count { it.isCompleted },
+                localCompletedNotSeen = report.localCompletedNotSeen.filter { notSeen ->
+                    candidates.any { it.linkKey == notSeen.linkKey && it.isCompleted }
+                },
                 diffs = report.diffs.filterNot { it.id in applied },
             )
         } ?: return
@@ -187,7 +208,8 @@ class ScanCoordinator(
 
     /**
      * Only very large frames are shrunk. On a 3168px-wide phone, shrinking to 1600px left achievement names
-     * about 20px tall and ML Kit misread characters (叩 → D/号) on every other frame.
+     * about 20px tall and the previous OCR (ML Kit) misread characters (叩 → D/号) on every other frame.
+     * PaddleOcr shrinks the frame itself for detection but reads each line from the full-size frame.
      */
     private fun scaleForOcr(frame: Bitmap): Bitmap {
         if (frame.width <= OcrMaxWidth) return frame
@@ -196,8 +218,9 @@ class ScanCoordinator(
     }
 
     /**
-     * Saves each scanned frame and its OCR lines (same TSV layout as the unit-test fixtures)
-     * under Android/data/com.local.stardbzzz/files/scan-debug/ for troubleshooting.
+     * Saves each scanned frame and its OCR lines (same TSV layout as the unit-test fixtures) under
+     * Android/data/com.local.stardbzzz/files/scan-debug/<session>/, plus what an offline replay needs
+     * (ScanReplayTest): the local achievement list, which tab/category each frame belongs to, and the report.
      */
     private class DebugFrameWriter(root: File?) {
         private val directory = root?.let {
@@ -205,19 +228,34 @@ class ScanCoordinator(
         }
         private var index = 0
 
-        fun write(frame: Bitmap, boxes: List<OcrBox>) {
+        fun write(frame: Bitmap, boxes: List<OcrBox>, progress: ScanProgress) {
             val dir = directory ?: return
             if (index >= MaxDebugFrames) return
             index++
             val name = "frame_%04d".format(Locale.ROOT, index)
             runCatching {
-                File(dir, "$name.jpg").outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, 70, it) }
-                File(dir, "$name.tsv").writeText(
-                    boxes.joinToString("\n", postfix = "\n") { box ->
-                        "%.4f\t%.4f\t%.4f\t%.4f\t%s".format(Locale.ROOT, box.left, box.top, box.right, box.bottom, box.text)
-                    },
+                // High quality so another OCR engine can be compared on these frames fairly.
+                File(dir, "$name.jpg").outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                File(dir, "$name.tsv").writeText(ScanDebugFiles.frameTsv(boxes))
+                File(dir, ScanDebugFiles.FrameIndex).appendText(
+                    ScanDebugFiles.frameIndexLine(name, progress.tab.orEmpty(), progress.category.orEmpty(), progress.collecting),
                 )
             }
+        }
+
+        fun writeCandidates(candidates: List<ScanCandidate>) {
+            val dir = directory ?: return
+            runCatching { File(dir, ScanDebugFiles.Candidates).writeText(ScanDebugFiles.candidatesTsv(candidates)) }
+        }
+
+        fun writeReport(report: ScanReport, list: AchievementListInfo) {
+            val dir = directory ?: return
+            val listHeader = buildString {
+                appendLine("本地成就列表\t${list.total} 条，最新版本 ${list.latestVersion ?: "未知"}")
+                appendLine("列表更新时间\t${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(Date(list.refreshedAtEpochMillis))}")
+                appendLine("stardb 同组连带标记已完成\t${list.completedViaGroup}")
+            }
+            runCatching { File(dir, ScanDebugFiles.Report).writeText(listHeader + ScanDebugFiles.reportText(report)) }
         }
     }
 
@@ -225,5 +263,6 @@ class ScanCoordinator(
         const val KeySaveDebugFrames = "save_debug_frames"
         const val OcrMaxWidth = 3200
         const val MaxDebugFrames = 1500
+        const val OverlaySettleMillis = 600L
     }
 }

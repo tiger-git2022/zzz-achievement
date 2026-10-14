@@ -58,6 +58,9 @@ object GameScreenParser {
     private val ProgressRegex = Regex("""(\d+)\s*/\s*(\d+)""")
     private val DigitsRegex = Regex("""\d+""")
 
+    /** A counter some rows show between name and description, e.g. 当前最多拥有: 91. */
+    private val ProgressLineRegex = Regex("""^\D{1,12}[:：]\s*\d+(\s*/\s*\d+)?$""")
+
     fun parse(boxes: List<OcrBox>): ParsedScreen = ParsedScreen(
         tabs = findTabs(boxes),
         sidebar = findSidebar(boxes),
@@ -85,19 +88,51 @@ object GameScreenParser {
     private fun findTabs(boxes: List<OcrBox>): Map<String, ScreenPoint> {
         val tabs = linkedMapOf<String, ScreenPoint>()
         // The tab bar starts at ~0.43 of the width; the scan overlay sits left of it.
-        boxes.filter { it.centerY < 0.12f && it.centerX > 0.45f }.forEach { box ->
+        val bar = boxes.filter { it.centerY < 0.12f && it.centerX > 0.45f }
+        // Characters already taken by a tab, so one read can't stand for two tabs (故市 ≈ 故事 and 城市).
+        val claimed = bar.map { BooleanArray(it.text.length) }
+        // Exact names first; then, for any still missing, a read with one of its two characters wrong
+        // (ML Kit reads 探索 as 採索 on every frame of one phone). A near match only counts as a box of its
+        // own: inside a merged line its midpoint could fall between two tabs.
+        bar.forEachIndexed { boxIndex, box ->
             // The tabs may come back as one merged line; place each name proportionally inside the box.
-            val text = box.text
             TabNames.forEach { name ->
-                val index = text.indexOf(name)
-                if (index >= 0 && name !in tabs) {
-                    val fraction = (index + name.length / 2f) / text.length
-                    tabs[name] = ScreenPoint(box.left + (box.right - box.left) * fraction, box.centerY)
-                }
+                if (name in tabs) return@forEach
+                val index = findName(box.text, name, claimed[boxIndex], exact = true)
+                if (index >= 0) tabs[name] = claim(box, claimed[boxIndex], name, index)
             }
         }
+        // A read one character off two missing names (故市: 故事 or 城市?) can't be placed yet, but may be once
+        // another box settles one of them (城区 → 城市), so repeat until nothing changes.
+        do {
+            var assigned = false
+            bar.forEachIndexed { boxIndex, box ->
+                val candidates = TabNames.filter { name ->
+                    name !in tabs && box.text.length == name.length &&
+                        findName(box.text, name, claimed[boxIndex], exact = false) == 0
+                }
+                candidates.singleOrNull()?.let { name ->
+                    tabs[name] = claim(box, claimed[boxIndex], name, 0)
+                    assigned = true
+                }
+            }
+        } while (assigned)
         return tabs
     }
+
+    private fun claim(box: OcrBox, claimed: BooleanArray, name: String, index: Int): ScreenPoint {
+        name.indices.forEach { claimed[index + it] = true }
+        val fraction = (index + name.length / 2f) / box.text.length
+        return ScreenPoint(box.left + (box.right - box.left) * fraction, box.centerY)
+    }
+
+    /** Start of the first unclaimed window of [text] matching [name] exactly, or in all but one character. */
+    private fun findName(text: String, name: String, claimed: BooleanArray, exact: Boolean): Int =
+        (0..text.length - name.length).firstOrNull { start ->
+            val free = name.indices.none { claimed[start + it] }
+            val same = name.indices.count { text[start + it] == name[it] }
+            free && same >= if (exact) name.length else name.length - 1
+        } ?: -1
 
     private fun findCompletedCount(boxes: List<OcrBox>): Int? {
         val label = boxes.firstOrNull { it.text.contains("完成数") && it.centerY < 0.15f } ?: return null
@@ -121,6 +156,7 @@ object GameScreenParser {
     private fun findRows(boxes: List<OcrBox>): List<GameRow> {
         val textColumn = boxes
             .filter { it.left in 0.25f..0.45f && it.centerY in 0.2f..0.97f }
+            .filterNot { ProgressLineRegex.matches(it.text.trim()) }
             .sortedBy { it.centerY }
         val statuses = boxes
             .filter { it.left >= 0.78f && it.centerY in 0.22f..0.97f }

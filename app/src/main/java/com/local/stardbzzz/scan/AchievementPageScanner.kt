@@ -25,6 +25,8 @@ data class ScanProgress(
     val category: String?,
     val pages: Int,
     val rows: Int,
+    /** Whether reads now are collected as rows (the downward pass through a category) or only navigate. */
+    val collecting: Boolean = false,
 )
 
 data class ScanCapture(
@@ -54,6 +56,7 @@ class AchievementPageScanner(
     private var currentTab: String? = null
     private var currentCategory: String? = null
     private var gameCompletedCount: Int? = null
+    private var collecting = false
 
     suspend fun scan(): ScanCapture {
         val first = readPage()
@@ -116,6 +119,8 @@ class AchievementPageScanner(
         // The game may keep an earlier scroll position, so fling back up until the list stops moving.
         scrollUntilStable(ListSwipeTo, ListSwipeFrom, timings.flingMillis, ::rowEntries) {}
 
+        collecting = true
+        report()
         scrollUntilStable(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, ::rowEntries) { page ->
             page.rows.forEach { row ->
                 rows += ObservedRow(tab, category, row.name, row.description, row.status)
@@ -123,6 +128,8 @@ class AchievementPageScanner(
             }
             report()
         }
+        collecting = false
+        report()
     }
 
     /** Name plus description: tiers of one achievement share a name and differ only in the description's numbers. */
@@ -174,7 +181,7 @@ class AchievementPageScanner(
     }
 
     private fun report() {
-        onProgress(ScanProgress(currentTab, currentCategory, pages, seenNames.size))
+        onProgress(ScanProgress(currentTab, currentCategory, pages, seenNames.size, collecting))
     }
 
     /**

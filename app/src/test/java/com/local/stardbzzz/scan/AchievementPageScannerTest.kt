@@ -8,6 +8,23 @@ import org.junit.Test
 
 class AchievementPageScannerTest {
     @Test
+    fun marksOnlyTheDownwardPassThroughACategoryAsCollecting() = runBlocking {
+        val game = FakeGame(GameScreenParser.TabNames.associateWith { tab -> listOf("${tab}分类" to rows(tab, 8)) })
+        var progress = ScanProgress(null, null, 0, 0)
+        val reads = mutableListOf<Pair<Boolean, List<OcrBox>>>()
+        // Like the app's debug writer: tag each read with the progress reported before it.
+        val reader = ScreenReader { game.read().also { reads += progress.collecting to it } }
+        val capture = AchievementPageScanner(reader, game, ScanTimings(0, 0, 0, 0)) { progress = it }.scan()
+
+        // Replaying only the reads tagged as collecting yields exactly the rows the scan collected.
+        val replayed = reads.filter { it.first }.flatMap { GameScreenParser.parse(it.second).rows }.map { it.name }
+        assertEquals(capture.rows.map { it.name }, replayed)
+        assertEquals(32, replayed.toSet().size)
+        // Tab discovery, sidebar rewinds and scroll-to-top reads aren't collected.
+        assertTrue(reads.count { !it.first } > GameScreenParser.TabNames.size)
+    }
+
+    @Test
     fun visitsEveryCategoryAndRowOnce() = runBlocking {
         val game = FakeGame(
             mapOf(

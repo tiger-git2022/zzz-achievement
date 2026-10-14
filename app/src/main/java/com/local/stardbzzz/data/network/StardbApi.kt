@@ -92,4 +92,10 @@ data class AchievementDto(
     val version: String? = null,
     val displayOrder: Int = 0,
     val completed: Boolean = false,
+    /**
+     * Marked completed only because stardb's group holding it has another member completed: the tracker sets
+     * one `complete` per achievement group and every member is shown completed. Counted to diagnose local
+     * completion totals that run above the game's.
+     */
+    val completedViaGroup: Boolean = false,
 )

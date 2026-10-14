@@ -120,6 +120,156 @@ class GameScreenParserTest {
         assertTrue(AchievementPageScanner.sameContent(first.sidebar.map { it.text }, second.sidebar.map { it.text }))
     }
 
+    @Test
+    fun tabReadWithOneWrongCharacterStillCounts() {
+        // ML Kit at full resolution read 探索 as 採索 on every frame of the second phone run.
+        val boxes = loadFixture("mlkit-story-frame2").map { if (it.text == "探索") it.copy(text = "採索") else it }
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(GameScreenParser.TabNames.toSet(), screen.tabs.keys)
+        assertEquals(0.88f, screen.tabs.getValue("探索").x, 0.01f)
+    }
+
+    @Test
+    fun aNearMatchForTwoMissingTabsIsSkipped() {
+        // 故市 is one character off both 故事 and 城市; guessing could send the 故事 tap to 城市.
+        val boxes = loadFixture("mlkit-story-frame2")
+            .filterNot { it.text == "故事" }
+            .map { if (it.text == "城市") it.copy(text = "故市") else it }
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(setOf("战术", "探索"), screen.tabs.keys)
+    }
+
+    @Test
+    fun aSkippedNearMatchIsSettledOnceAnotherTabIs() {
+        // 故市 fits 故事 or 城市 at first; once 城区 settles 城市, 故市 can only be 故事.
+        val frame = loadFixture("mlkit-story-frame2")
+        val story = frame.single { it.text == "故事" }
+        val boxes = frame.map {
+            when (it.text) {
+                "故事" -> it.copy(text = "故市")
+                "城市" -> it.copy(text = "城区")
+                else -> it
+            }
+        }
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(GameScreenParser.TabNames.toSet(), screen.tabs.keys)
+        assertEquals(story.centerX, screen.tabs.getValue("故事").x, 0.001f)
+    }
+
+    @Test
+    fun aNearMatchForOneMissingTabCounts() {
+        // With 城市 read correctly, 故市 can only be 故事.
+        val frame = loadFixture("mlkit-story-frame2")
+        val story = frame.single { it.text == "故事" }
+        val boxes = frame.map { if (it === story) it.copy(text = "故市") else it }
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(story.centerX, screen.tabs.getValue("故事").x, 0.001f)
+        assertEquals(4, screen.tabs.size)
+    }
+
+    @Test
+    fun nearMatchInsideAMergedLineIsIgnored() {
+        // One wide box spanning two tabs, with only a near match: its midpoint is no tab's position.
+        val boxes = loadFixture("mlkit-story-frame2")
+            .filterNot { it.text == "故事" || it.text == "城市" } +
+            OcrBox("故市 x", 0.4875f, 0.0468f, 0.6400f, 0.0743f)
+
+        val screen = GameScreenParser.parse(boxes)
+
+        assertEquals(setOf("战术", "探索"), screen.tabs.keys)
+    }
+
+    @Test
+    fun skipsTheProgressLineBetweenNameAndDescription() {
+        // Sample C from the second phone run (叱咤 read as 比咤).
+        val screen = GameScreenParser.parse(
+            boxes(
+                """
+                0.2932 0.6639 0.3677 0.6896 比咤以太之王
+                0.2936 0.6979 0.3763 0.7208 当前最多拥有: 91
+                0.2907 0.7250 0.5117 0.7542 通关枯萎之都时,拥有的鸣徽不少于50枚。
+                0.8176 0.6938 0.8968 0.7250 2026年8月2日
+                """,
+            ),
+        )
+
+        val row = screen.rows.single()
+        assertEquals("比咤以太之王", row.name)
+        assertEquals("通关枯萎之都时,拥有的鸣徽不少于50枚。", row.description)
+        assertEquals(RowStatus.Completed("2026-08-02"), row.status)
+    }
+
+    @Test
+    fun readsTieredRowsAndAStatusWithALeadingCheckMark() {
+        // Samples B and D from the second phone run.
+        val screen = GameScreenParser.parse(
+            boxes(
+                """
+                0.2876 0.2604 0.3551 0.2924 断金裂石1
+                0.2932 0.2986 0.4940 0.3264 在战斗中,累计触发10次『毁伤」效果。
+                0.2929 0.4014 0.3523 0.4278 断金製石=
+                0.2917 0.4347 0.4940 0.4625 在战斗中,累计触发50次「毁伤｣效果。
+                0.2869 0.5354 0.3595 0.5688 断金裂石=
+                0.2910 0.5701 0.5016 0.6007 在战斗中,累计触发200次『毁伤」效果。
+                0.8138 0.2833 0.9003 0.3076 2026年9月12日
+                0.8138 0.4201 0.9006 0.4444 2026年9月15日
+                0.8128 0.5597 0.9012 0.5813 2026年10月12日
+                0.2936 0.8160 0.3677 0.8417 只是來串个们
+                0.2932 0.8500 0.4366 0.8743 破译[罗新威克的绘本残页。
+                0.7936 0.8306 0.9006 0.8618 O2026年10月1日
+                """,
+            ),
+        )
+
+        assertEquals(listOf("断金裂石1", "断金製石=", "断金裂石=", "只是來串个们"), screen.rows.map { it.name })
+        assertEquals(
+            listOf(listOf("10"), listOf("50"), listOf("200")),
+            screen.rows.take(3).map { AchievementMatcher.numbersIn(it.description) },
+        )
+        assertEquals(RowStatus.Completed("2026-10-01"), screen.rows.last().status)
+    }
+
+    @Test
+    fun parsesThePaddleOcrReadOfACityPage() {
+        val screen = GameScreenParser.parse(loadFixture("paddle-city"))
+
+        assertEquals(GameScreenParser.TabNames.toSet(), screen.tabs.keys)
+        assertEquals(631, screen.completedCount)
+        assertEquals(
+            listOf("绳匠业务", "雅努斯区", "卫非地", "外环地带", "索恩区", "罗斯凯利法"),
+            screen.sidebar.map { it.text },
+        )
+        assertEquals(
+            listOf(
+                GameRow("LV60，恭迎王的回归", "绳网等级达到60级。", RowStatus.InProgress(57, 60)),
+                GameRow(
+                    "「德丰大押」荣誉顾客",
+                    "在「德丰大押』中，用云纹徽兑换[鹤唳天青]、[翠影朱绾]和[柠火溯流]。",
+                    RowStatus.InProgress(2, 3),
+                ),
+                GameRow("潮头浪尖", "收集6套主题和挂坠。", RowStatus.InProgress(7, 12)),
+                GameRow("精选帖核心受众", "在绳网上阅读并回复10条『Fairy精选』帖子。", RowStatus.InProgress(3, 10)),
+                GameRow("少女神明的七日箱庭", "通过[调整时段]功能，累计推移28个时段。", RowStatus.Completed("2026-06-26")),
+            ),
+            screen.rows,
+        )
+    }
+
+    /** Space-separated "left top right bottom text" lines, as in the round-two notes. */
+    private fun boxes(lines: String): List<OcrBox> =
+        lines.trimIndent().lines().filter { it.isNotBlank() }.map { line ->
+            val parts = line.trim().split(' ', limit = 5)
+            OcrBox(parts[4], parts[0].toFloat(), parts[1].toFloat(), parts[2].toFloat(), parts[3].toFloat())
+        }
+
     private fun loadFixture(name: String): List<OcrBox> {
         val stream = javaClass.classLoader!!.getResourceAsStream("ocr/$name.tsv")
         return stream.bufferedReader().readLines()

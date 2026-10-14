@@ -139,6 +139,7 @@ private fun Map<*, *>.toAchievements(): List<AchievementDto> {
                 val achievement = achievementItem as? Map<*, *> ?: return@mapNotNull null
                 if (achievement["impossible"] == true) return@mapNotNull null
                 val id = achievement["id"]?.toString() ?: return@mapNotNull null
+                val viaGroup = completeId != null && achievements.size > 1 && !sameId(completeId, id)
                 AchievementDto(
                     id = id,
                     name = achievement["name"]?.toString().orEmpty(),
@@ -149,6 +150,7 @@ private fun Map<*, *>.toAchievements(): List<AchievementDto> {
                     version = achievement["version"]?.toString().orEmpty(),
                     displayOrder = order++,
                     completed = completeId != null,
+                    completedViaGroup = viaGroup,
                 )
             }
         }
@@ -171,6 +173,7 @@ private fun JSONObject.toAchievements(): List<AchievementDto> {
                 val achievement = achievements.optJSONObject(achievementIndex) ?: return@mapNotNull null
                 if (achievement.optBoolean("impossible", false)) return@mapNotNull null
                 val id = achievement.opt("id")?.toString() ?: return@mapNotNull null
+                val viaGroup = completeId != null && achievements.length() > 1 && !sameId(completeId, id)
                 AchievementDto(
                     id = id,
                     name = achievement.optString("name"),
@@ -181,11 +184,16 @@ private fun JSONObject.toAchievements(): List<AchievementDto> {
                     version = achievement.optString("version"),
                     displayOrder = order++,
                     completed = completeId != null,
+                    completedViaGroup = viaGroup,
                 )
             }
         }
     }.distinctBy { it.id }
 }
+
+/** Ids can come back as 4040123 or 4040123.0 depending on how the number was decoded. */
+private fun sameId(a: String, b: String): Boolean =
+    a == b || (a.toDoubleOrNull() != null && a.toDoubleOrNull() == b.toDoubleOrNull())
 
 private fun Map<*, *>.displayName(): String =
     listOf("name", "title", "label", "series_name")

@@ -4,12 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
-import java.awt.Color
-import java.awt.Font
-import java.awt.RenderingHints
-import java.awt.image.BufferedImage
 import java.io.File
-import javax.imageio.ImageIO
 
 class PaddleOcrTest {
     @Test
@@ -83,22 +78,12 @@ class PaddleOcrTest {
     /** The bundled models on a drawn counter and date, end to end (BGR order, normalization, dictionary). */
     @Test
     fun readsDrawnDigitsWithTheBundledModels() {
-        val image = BufferedImage(1200, 400, BufferedImage.TYPE_INT_RGB)
-        val drawn = runCatching {
-            image.createGraphics().apply {
-                setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
-                color = Color(24, 24, 28)
-                fillRect(0, 0, image.width, image.height)
-                color = Color(235, 235, 235)
-                font = Font(Font.SANS_SERIF, Font.BOLD, 56)
-                drawString("07/12", 120, 140)
-                drawString("2026-07-11", 600, 300)
-                dispose()
-            }
-        }.isSuccess
-        assumeTrue("no font to draw with on this machine", drawn)
+        val image = runCatching {
+            DesktopImages.drawText(1200, 400, size = 56, lines = listOf(Triple("07/12", 120, 140), Triple("2026-07-11", 600, 300)))
+        }.getOrNull()
+        assumeTrue("no font to draw with on this machine", image != null)
 
-        val texts = bundledOcr().use { ocr -> ocr.recognize(image.toRgbImage()) }.map { it.text.replace(" ", "") }
+        val texts = bundledOcr().use { ocr -> ocr.recognize(image!!) }.map { it.text.replace(" ", "") }
 
         assertTrue(texts.toString(), "07/12" in texts)
         assertTrue(texts.toString(), "2026-07-11" in texts)
@@ -125,7 +110,7 @@ class PaddleOcrTest {
         bundledOcr().use { ocr ->
             val millis = frames.map { frame ->
                 val started = System.nanoTime()
-                val boxes = ocr.recognize(ImageIO.read(frame).toRgbImage())
+                val boxes = ocr.recognize(DesktopImages.read(frame))
                 val elapsed = (System.nanoTime() - started) / 1_000_000
                 File(frame.parentFile, frame.nameWithoutExtension + suffix).writeText(ScanDebugFiles.frameTsv(boxes))
                 println("${frame.name}: ${boxes.size} lines, $elapsed ms")
@@ -143,7 +128,48 @@ class PaddleOcrTest {
             File(models, "dict.txt").readText(),
         )
     }
+}
 
-    private fun BufferedImage.toRgbImage(): RgbImage =
-        RgbImage(width, height, getRGB(0, 0, width, height, null, 0, width))
+/**
+ * java.awt and javax.imageio through reflection: unit tests compile against android.jar, which lacks them,
+ * but run on a desktop JDK, which has them.
+ */
+private object DesktopImages {
+    private val int = Int::class.javaPrimitiveType!!
+
+    fun read(file: File): RgbImage =
+        toRgbImage(Class.forName("javax.imageio.ImageIO").getMethod("read", File::class.java).invoke(null, file)!!)
+
+    /** Light bold sans-serif [lines] (text, x, baseline y) on a dark background, like the game's. */
+    fun drawText(width: Int, height: Int, size: Int, lines: List<Triple<String, Int, Int>>): RgbImage {
+        val imageClass = Class.forName("java.awt.image.BufferedImage")
+        val image = imageClass.getConstructor(int, int, int).newInstance(width, height, 1) // TYPE_INT_RGB
+        val graphicsClass = Class.forName("java.awt.Graphics2D")
+        val graphics = imageClass.getMethod("createGraphics").invoke(image)
+        val hints = Class.forName("java.awt.RenderingHints")
+        graphicsClass.getMethod("setRenderingHint", Class.forName("java.awt.RenderingHints\$Key"), Any::class.java)
+            .invoke(graphics, hints.getField("KEY_TEXT_ANTIALIASING").get(null), hints.getField("VALUE_TEXT_ANTIALIAS_ON").get(null))
+        val colorClass = Class.forName("java.awt.Color")
+        fun setColor(gray: Int) = graphicsClass.getMethod("setColor", colorClass)
+            .invoke(graphics, colorClass.getConstructor(int, int, int).newInstance(gray, gray, gray))
+        setColor(24)
+        graphicsClass.getMethod("fillRect", int, int, int, int).invoke(graphics, 0, 0, width, height)
+        setColor(235)
+        val fontClass = Class.forName("java.awt.Font")
+        graphicsClass.getMethod("setFont", fontClass)
+            .invoke(graphics, fontClass.getConstructor(String::class.java, int, int).newInstance("SansSerif", 1, size)) // BOLD
+        val drawString = graphicsClass.getMethod("drawString", String::class.java, int, int)
+        lines.forEach { (text, x, y) -> drawString.invoke(graphics, text, x, y) }
+        graphicsClass.getMethod("dispose").invoke(graphics)
+        return toRgbImage(image)
+    }
+
+    private fun toRgbImage(image: Any): RgbImage {
+        val imageClass = image.javaClass
+        val width = imageClass.getMethod("getWidth").invoke(image) as Int
+        val height = imageClass.getMethod("getHeight").invoke(image) as Int
+        val pixels = imageClass.getMethod("getRGB", int, int, int, int, IntArray::class.java, int, int)
+            .invoke(image, 0, 0, width, height, null, 0, width) as IntArray
+        return RgbImage(width, height, pixels)
+    }
 }

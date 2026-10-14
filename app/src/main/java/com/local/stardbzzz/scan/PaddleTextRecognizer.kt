@@ -1,21 +1,16 @@
 package com.local.stardbzzz.scan
 
 import android.content.Context
-import android.graphics.Bitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.Closeable
 
 /**
  * On-device Chinese OCR with the bundled PaddleOCR models (assets/ppocr); returns one box per recognized line,
- * normalized to the bitmap size.
+ * normalized to the image size.
  */
 class PaddleTextRecognizer private constructor(private val ocr: PaddleOcr) : Closeable {
-    suspend fun recognize(bitmap: Bitmap): List<OcrBox> = withContext(Dispatchers.Default) {
-        val pixels = IntArray(bitmap.width * bitmap.height)
-        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-        ocr.recognize(RgbImage(bitmap.width, bitmap.height, pixels))
-    }
+    suspend fun recognize(image: RgbImage): List<OcrBox> = withContext(Dispatchers.Default) { ocr.recognize(image) }
 
     override fun close() {
         ocr.close()

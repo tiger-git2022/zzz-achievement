@@ -107,26 +107,27 @@ class ScanCoordinator(
         _state.value = ScanState.Running(ScanProgress(null, null, 0, 0))
         job = scope.launch {
             var recognizer: PaddleTextRecognizer? = null
+            // A shrunk copy of the last frame (screens wider than OcrMaxWidth), owned here; the capture's own
+            // frame isn't. A frame is only used until the next capture, so each copy is recycled then.
+            var shrunk: Bitmap? = null
+            val queueDirectory = File(appContext.cacheDir, QueueDirectory).apply { deleteRecursively() }
             try {
                 val candidates = repository.scanCandidates()
                 require(candidates.isNotEmpty()) { "本地还没有成就数据，请先在 App 里登录并刷新" }
                 val ocr = PaddleTextRecognizer.create(appContext).also { recognizer = it }
                 // A panel dragged over the tab bar while Ready moves back to its spot once Running; let it.
                 delay(OverlaySettleMillis)
-                val debug = if (_saveDebugFrames.value) DebugFrameWriter(debugDirectory) else null
+                var progress = ScanProgress(null, null, 0, 0)
+                val debug = if (_saveDebugFrames.value) DebugFrameWriter(debugDirectory) { progress } else null
                 debug?.writeCandidates(candidates)
                 val listInfo = repository.achievementListInfo()
-                var progress = ScanProgress(null, null, 0, 0)
-                val reader = ScreenReader {
+                val grab: suspend () -> Bitmap = {
                     val frame = screen.capture()
-                    val scaled = scaleForOcr(frame)
-                    try {
-                        ocr.recognize(scaled).also { boxes -> debug?.write(scaled, boxes, progress) }
-                    } finally {
-                        if (scaled !== frame) scaled.recycle()
-                    }
+                    shrunk?.recycle()
+                    scaleForOcr(frame).also { shrunk = it.takeIf { copy -> copy !== frame } }
                 }
-                val result = AchievementPageScanner(reader, gestures) { update ->
+                val source = CapturedScreenSource(grab, ocr, queueDirectory, debug)
+                val result = AchievementPageScanner(source, gestures) { update ->
                     progress = update
                     _state.value = ScanState.Running(update)
                 }.scan()
@@ -149,6 +150,8 @@ class ScanCoordinator(
                 _state.value = ScanState.Failed(failure.message ?: failure.javaClass.simpleName)
             } finally {
                 recognizer?.close()
+                queueDirectory.deleteRecursively()
+                shrunk?.recycle()
             }
         }
     }
@@ -225,23 +228,47 @@ class ScanCoordinator(
      * Android/data/com.local.stardbzzz/files/scan-debug/<session>/, plus what an offline replay needs
      * (ScanReplayTest): the local achievement list, which tab/category each frame belongs to, and the report.
      */
-    private class DebugFrameWriter(root: File?) {
+    private class DebugFrameWriter(root: File?, private val progress: () -> ScanProgress) : FrameLog {
         private val directory = root?.let {
             File(it, SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())).apply { mkdirs() }
         }
         private var index = 0
 
-        fun write(frame: Bitmap, boxes: List<OcrBox>, progress: ScanProgress) {
-            val dir = directory ?: return
-            if (index >= MaxDebugFrames) return
+        /** Where the scan was when each queued frame was captured; its lines arrive later. */
+        private val queuedAt = mutableMapOf<String, ScanProgress>()
+
+        /** Frames read right away steer the scan (first page, sidebar); their rows aren't collected. */
+        @Synchronized
+        override fun read(frame: Bitmap, boxes: List<OcrBox>) {
+            val name = saveImage(frame) ?: return
+            writeLines(name, boxes, progress(), collected = false)
+        }
+
+        @Synchronized
+        override fun queued(frame: Bitmap): String? = saveImage(frame)?.also { queuedAt[it] = progress() }
+
+        @Synchronized
+        override fun readLater(handle: String, boxes: List<OcrBox>) {
+            val at = queuedAt.remove(handle) ?: return
+            writeLines(handle, boxes, at, collected = true)
+        }
+
+        private fun saveImage(frame: Bitmap): String? {
+            val dir = directory ?: return null
+            if (index >= MaxDebugFrames) return null
             index++
             val name = "frame_%04d".format(Locale.ROOT, index)
+            // High quality so another OCR engine can be compared on these frames fairly.
+            runCatching { File(dir, "$name.jpg").outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, 90, it) } }
+            return name
+        }
+
+        private fun writeLines(name: String, boxes: List<OcrBox>, at: ScanProgress, collected: Boolean) {
+            val dir = directory ?: return
             runCatching {
-                // High quality so another OCR engine can be compared on these frames fairly.
-                File(dir, "$name.jpg").outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, 90, it) }
                 File(dir, "$name.tsv").writeText(ScanDebugFiles.frameTsv(boxes))
                 File(dir, ScanDebugFiles.FrameIndex).appendText(
-                    ScanDebugFiles.frameIndexLine(name, progress.tab.orEmpty(), progress.category.orEmpty(), progress.collecting),
+                    ScanDebugFiles.frameIndexLine(name, at.tab.orEmpty(), at.category.orEmpty(), collected),
                 )
             }
         }
@@ -267,5 +294,8 @@ class ScanCoordinator(
         const val OcrMaxWidth = 3200
         const val MaxDebugFrames = 1500
         const val OverlaySettleMillis = 600L
+
+        /** Pages waiting for OCR, under the app's cache directory. */
+        const val QueueDirectory = "scan-queue"
     }
 }

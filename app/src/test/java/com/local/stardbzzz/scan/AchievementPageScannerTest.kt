@@ -8,20 +8,18 @@ import org.junit.Test
 
 class AchievementPageScannerTest {
     @Test
-    fun marksOnlyTheDownwardPassThroughACategoryAsCollecting() = runBlocking {
+    fun readsOnlyTheFirstPageWholeAndQueuesEachListPageOnce() = runBlocking {
         val game = FakeGame(GameScreenParser.TabNames.associateWith { tab -> listOf("${tab}分类" to rows(tab, 8)) })
-        var progress = ScanProgress(null, null, 0, 0)
-        val reads = mutableListOf<Pair<Boolean, List<OcrBox>>>()
-        // Like the app's debug writer: tag each read with the progress reported before it.
-        val reader = ScreenReader { game.read().also { reads += progress.collecting to it } }
-        val capture = AchievementPageScanner(reader, game, ScanTimings(0, 0, 0, 0)) { progress = it }.scan()
 
-        // Replaying only the reads tagged as collecting yields exactly the rows the scan collected.
-        val replayed = reads.filter { it.first }.flatMap { GameScreenParser.parse(it.second).rows }.map { it.name }
-        assertEquals(capture.rows.map { it.name }, replayed)
-        assertEquals(32, replayed.toSet().size)
-        // Tab discovery, sidebar rewinds and scroll-to-top reads aren't collected.
-        assertTrue(reads.count { !it.first } > GameScreenParser.TabNames.size)
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).scan()
+
+        // The rows come from the queued pages alone, and every row was collected.
+        assertEquals(capture.rows.map { it.name }, game.keptReads.flatMap { GameScreenParser.parse(it).rows }.map { it.name })
+        assertEquals(32, capture.rows.map { it.name }.toSet().size)
+        // 8 rows, 5 visible, 3 per swipe: the top page and one more. Pages that didn't move aren't queued again.
+        assertEquals(4 * 2, game.keptReads.size)
+        // Tabs and 完成数 come from one whole-page read; scrolling is judged from thumbnails, not OCR.
+        assertEquals(1, game.wholeReads)
     }
 
     @Test
@@ -34,9 +32,9 @@ class AchievementPageScannerTest {
                 "探索" to listOf("探索分类" to rows("探索", 0)),
             ),
         )
-        val scanner = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0))
+        val progress = mutableListOf<ScanProgress>()
 
-        val capture = scanner.scan()
+        val capture = AchievementPageScanner(game, game, ScanTimings.None) { progress += it }.scan()
 
         val expected = game.tabs.flatMap { (tab, categories) ->
             categories.flatMap { (category, rows) -> rows.map { Triple(tab, category, it) } }
@@ -45,6 +43,10 @@ class AchievementPageScannerTest {
         assertEquals(expected, captured)
         assertEquals(42, capture.gameCompletedCount)
         assertTrue(capture.rows.all { it.status == RowStatus.Completed("2026-01-01") })
+        // The last report: capturing done and every queued page read.
+        val last = progress.last()
+        assertFalse(last.capturing)
+        assertEquals(last.queued, last.read)
     }
 
     @Test
@@ -55,7 +57,7 @@ class AchievementPageScannerTest {
             startAtBottom = true,
         )
 
-        val capture = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0)).scan()
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).scan()
 
         assertEquals(36, capture.rows.map { it.category }.toSet().size)
         assertEquals(4 * 9 * 8, capture.rows.map { it.name }.toSet().size)
@@ -73,22 +75,22 @@ class AchievementPageScannerTest {
             dropSidebarAfterSidebarSwipe = true,
         )
 
-        val capture = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0)).scan()
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).scan()
 
         assertEquals(12, capture.rows.map { it.category }.toSet().size)
     }
 
     @Test
-    fun ocrJitterBetweenFramesStillEndsEachList() = runBlocking {
-        // Real ML Kit reads of an unchanged frame differ by a character (叩响 → D响), so exact comparison
-        // never saw the list settle and rewound the first category until the page cap.
+    fun ocrJitterDoesNotKeepAListScrolling() = runBlocking {
+        // Real OCR of an unchanged frame differs by a character (叩响 → D响). Whether the list moved is judged
+        // from the pixels, which OCR doesn't touch.
         val game = FakeGame(
             GameScreenParser.TabNames.associateWith { tab -> (1..3).map { c -> "${tab}分类$c" to rows("$tab$c", 8) } },
             startAtBottom = true,
             jitterRows = true,
         )
 
-        val capture = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0)).scan()
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).scan()
 
         val expected = game.tabs.values.flatten().flatMap { it.second }.toSet()
         assertEquals(expected, capture.rows.map { game.unjitter(it.name) }.toSet())
@@ -107,7 +109,7 @@ class AchievementPageScannerTest {
             jitterSidebar = true,
         )
 
-        val capture = AchievementPageScanner(game, game, ScanTimings(0, 0, 0, 0)).scan()
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).scan()
 
         assertEquals(4 * 8, game.categoryTaps)
         assertEquals(4 * 8 * 4, capture.rows.map { it.name }.toSet().size)
@@ -118,13 +120,25 @@ class AchievementPageScannerTest {
         // The first frame can have the counter covered (the overlay was still laid out for portrait).
         val game = FakeGame(GameScreenParser.TabNames.associateWith { listOf("${it}分类" to rows(it, 3)) })
         var reads = 0
-        val coveredFirst = ScreenReader {
-            game.read().let { boxes -> if (reads++ == 0) boxes.filterNot { it.text == "完成数" } else boxes }
-        }
+        val coveredFirst = game.readingAs { boxes -> if (reads++ == 0) boxes.filterNot { it.text == "完成数" } else boxes }
 
-        val capture = AchievementPageScanner(coveredFirst, game, ScanTimings(0, 0, 0, 0)).scan()
+        val capture = AchievementPageScanner(coveredFirst, game, ScanTimings.None).scan()
 
         assertEquals(42, capture.gameCompletedCount)
+    }
+
+    @Test
+    fun stopsAsSoonAsTheGameLeavesTheAchievementPage() {
+        val game = FakeGame(
+            GameScreenParser.TabNames.associateWith { tab -> (1..3).map { c -> "${tab}分类$c" to rows("$tab$c", 12) } },
+            leaveAfterSwipes = 5,
+        )
+
+        val failure = runCatching { runBlocking { AchievementPageScanner(game, game, ScanTimings.None).scan() } }.exceptionOrNull()
+
+        assertTrue("$failure", failure is NotOnAchievementPageException)
+        // Nothing is tapped or swiped in whatever the screen shows instead.
+        assertEquals(0, game.gesturesAfterLeaving)
     }
 
     @Test
@@ -152,19 +166,37 @@ class AchievementPageScannerTest {
         assertTrue(AchievementPageScanner.sameContent(tiers.take(5), tiers.take(5).map { it.replace("空洞", "空同") }))
     }
 
+    @Test
+    fun thumbnailDifferenceIsTheMeanPerPixel() {
+        val gray = { value: Int -> (0xFF shl 24) or (value shl 16) or (value shl 8) or value }
+        // A 16 x 8 screen of gray 100, and the same with its right half at 120.
+        val plain = IntArray(16 * 8) { gray(100) }
+        val half = IntArray(16 * 8) { if (it % 16 >= 8) gray(120) else gray(100) }
+
+        val a = Thumbnail.of(plain, 16, 0, 0, 16, 8)
+        val b = Thumbnail.of(half, 16, 0, 0, 16, 8)
+
+        assertEquals(2, a.width)
+        assertEquals(1, a.height)
+        assertEquals(100f, a.pixels[0], 0.5f)
+        assertEquals(10f, a.difference(b), 0.5f)
+        assertEquals(Float.MAX_VALUE, a.difference(Thumbnail.of(plain, 16, 0, 0, 8, 8)))
+    }
+
     @Test(expected = MissingTabsException::class)
     fun failsInsteadOfSkippingAnUnreadableTab() {
         runBlocking {
             val game = FakeGame(GameScreenParser.TabNames.associateWith { listOf("${it}分类" to rows(it, 3)) })
-            val withoutExplore = ScreenReader { game.read().filterNot { it.text == "探索" } }
-            AchievementPageScanner(withoutExplore, game, ScanTimings(0, 0, 0, 0)).scan()
+            val withoutExplore = game.readingAs { boxes -> boxes.filterNot { it.text == "探索" } }
+            AchievementPageScanner(withoutExplore, game, ScanTimings.None).scan()
         }
     }
 
     @Test(expected = NotOnAchievementPageException::class)
     fun failsWhenNotOnAchievementPage() {
         runBlocking {
-            AchievementPageScanner({ emptyList() }, FakeGame(emptyMap()), ScanTimings(0, 0, 0, 0)).scan()
+            val game = FakeGame(emptyMap())
+            AchievementPageScanner(game.readingAs { emptyList() }, game, ScanTimings.None).scan()
         }
     }
 
@@ -176,22 +208,30 @@ class AchievementPageScannerTest {
         startAtBottom: Boolean = false,
         /** Simulates one OCR read that misses the sidebar right after it first scrolls. */
         private val dropSidebarAfterSidebarSwipe: Boolean = false,
-        /** Every other read garbles one character of each row name, like real OCR of an unchanged frame. */
+        /** Every other capture garbles one character of each row name, like real OCR of an unchanged frame. */
         private val jitterRows: Boolean = false,
-        /** Every other read garbles the last character of each sidebar label. */
+        /** Every other capture garbles the last character of each sidebar label. */
         private val jitterSidebar: Boolean = false,
-    ) : ScreenReader, GestureInput {
+        /** The game switches to another screen after this many swipes. */
+        private val leaveAfterSwipes: Int? = null,
+    ) : ScreenSource, GestureInput {
         var swipes = 0
             private set
         var categoryTaps = 0
             private set
-        private var reads = 0
+        var wholeReads = 0
+            private set
+        val keptReads = mutableListOf<List<OcrBox>>()
+        var gesturesAfterLeaving = 0
+            private set
+        private var captures = 0
+        private val left get() = leaveAfterSwipes != null && swipes >= leaveAfterSwipes
 
         fun unjitter(name: String) = name.replace(JitterChar, "成")
 
-        private fun jitter(name: String) = if (jitterRows && reads % 2 == 0) name.replace("成", JitterChar) else name
+        private fun jitter(name: String) = if (jitterRows && captures % 2 == 0) name.replace("成", JitterChar) else name
 
-        private var hideSidebarOnNextRead = false
+        private var hideSidebarOnNextCapture = false
         private var droppedSidebar = false
         private var tab = tabs.keys.firstOrNull()
         private var category = 0
@@ -221,8 +261,24 @@ class AchievementPageScannerTest {
         private val categories get() = tabs[tab].orEmpty()
         private val rowsInCategory get() = categories.getOrNull(category)?.second.orEmpty()
 
-        override suspend fun read(): List<OcrBox> {
-            reads++
+        /** This game's frames, with every OCR read passed through [transform]. */
+        fun readingAs(transform: (List<OcrBox>) -> List<OcrBox>) = ScreenSource {
+            val frame = capture()
+            object : ScreenFrame by frame {
+                override suspend fun read(region: ScreenRegion) = transform(frame.read(region))
+            }
+        }
+
+        override suspend fun capture(): ScreenFrame {
+            captures++
+            if (left) return FakeFrame(listOf(OcrBox("另一个应用", 0.5f, 0.04f, 0.7f, 0.08f)), emptyList())
+            val showSidebar = !hideSidebarOnNextCapture
+            hideSidebarOnNextCapture = false
+            return FakeFrame(screen(showSidebar, garble = true), screen(showSidebar = true, garble = false))
+        }
+
+        /** What OCR reads ([garble]) or what the pixels show. */
+        private fun screen(showSidebar: Boolean, garble: Boolean): List<OcrBox> {
             val boxes = mutableListOf<OcrBox>()
             boxes += OcrBox("完成数", 0.10f, 0.03f, 0.14f, 0.06f)
             boxes += OcrBox("42", 0.10f, 0.064f, 0.13f, 0.094f)
@@ -230,23 +286,36 @@ class AchievementPageScannerTest {
                 val x = 0.50f + index * 0.125f
                 boxes += OcrBox(name, x, 0.04f, x + 0.03f, 0.08f)
             }
-            val showSidebar = !hideSidebarOnNextRead
-            hideSidebarOnNextRead = false
             if (showSidebar) categories.drop(sidebarOffset).take(VisibleLabels).forEachIndexed { index, (name, _) ->
                 val y = 0.35f + index * 0.0845f
-                val label = if (jitterSidebar && reads % 2 == 0) name.dropLast(1) + "圓" else name
+                val label = if (garble && jitterSidebar && captures % 2 == 0) name.dropLast(1) + "圓" else name
                 boxes += OcrBox(label, 0.11f, y - 0.015f, 0.18f, y + 0.015f)
             }
             rowsInCategory.drop(listOffset).take(VisibleRows).forEachIndexed { index, name ->
                 val y = 0.30f + index * 0.136f
-                boxes += OcrBox(jitter(name), 0.29f, y - 0.032f, 0.40f, y - 0.005f)
+                boxes += OcrBox(if (garble) jitter(name) else name, 0.29f, y - 0.032f, 0.40f, y - 0.005f)
                 boxes += OcrBox("描述$name", 0.29f, y + 0.003f, 0.45f, y + 0.028f)
                 boxes += OcrBox("2026年1月1日", 0.81f, y - 0.016f, 0.90f, y + 0.016f)
             }
             return boxes
         }
 
+        private inner class FakeFrame(private val ocr: List<OcrBox>, private val pixels: List<OcrBox>) : ScreenFrame {
+            override suspend fun read(region: ScreenRegion): List<OcrBox> {
+                if (region == ScreenRegion.Full) wholeReads++
+                return ocr.filter { it in region }
+            }
+
+            override fun thumbnail(region: ScreenRegion): Thumbnail = fingerprint(pixels.filter { it in region })
+
+            override suspend fun keep(region: ScreenRegion): KeptFrame {
+                val kept = ocr.filter { it in region }
+                return KeptFrame { kept.also { keptReads += it } }
+            }
+        }
+
         override suspend fun tap(point: ScreenPoint) {
+            if (left) gesturesAfterLeaving++
             if (point.y < 0.12f) {
                 tab = GameScreenParser.TabNames[((point.x - 0.50f) / 0.125f).toInt()]
                 category = 0
@@ -257,13 +326,14 @@ class AchievementPageScannerTest {
         }
 
         override suspend fun swipe(from: ScreenPoint, to: ScreenPoint, durationMillis: Long) {
+            if (left) gesturesAfterLeaving++
             swipes++
             val forward = from.y > to.y
             if (from.x < 0.25f) {
                 val max = (categories.size - VisibleLabels).coerceAtLeast(0)
                 sidebarOffset = (sidebarOffset + if (forward) 3 else -3).coerceIn(0, max)
                 if (forward && dropSidebarAfterSidebarSwipe && !droppedSidebar) {
-                    hideSidebarOnNextRead = true
+                    hideSidebarOnNextCapture = true
                     droppedSidebar = true
                 }
             } else {
@@ -276,6 +346,16 @@ class AchievementPageScannerTest {
             const val VisibleLabels = 6
             const val VisibleRows = 5
             const val JitterChar = "戍"
+
+            operator fun ScreenRegion.contains(box: OcrBox) = box.centerX in left..right && box.centerY in top..bottom
+
+            /** Stands in for a thumbnail: equal for equal content, far apart (~85 on average) otherwise. */
+            fun fingerprint(boxes: List<OcrBox>): Thumbnail {
+                val text = boxes.joinToString("|") { "${it.text}@${it.top}" }
+                val hashes = listOf(text.hashCode(), (text + "#").hashCode(), text.reversed().hashCode(), ("#" + text).hashCode())
+                val pixels = FloatArray(16) { i -> (hashes[i / 4] ushr (i % 4 * 8) and 0xFF).toFloat() }
+                return Thumbnail(16, 1, pixels)
+            }
         }
     }
 }

@@ -7,8 +7,9 @@ import java.util.Locale
  * by the app, which writes them, and ScanReplayTest, which replays a session offline:
  *
  * - frame_NNNN.tsv: one OCR line per row, `left top right bottom text`, coordinates normalized to the frame.
- * - frames.tsv: `frame tab category collected` — where the scanner was when it read each frame, and whether the
- *   scan collected that frame's rows (1) or only navigated with it (0: tab, sidebar and scroll-to-top reads).
+ * - frames.tsv: `frame tab category collected` — where the scanner was when it captured each frame, and whether the
+ *   scan collected that frame's rows (1: a list page queued for OCR) or only navigated with it (0: the first page and
+ *   sidebar reads). Frames the scan only compared by thumbnail (scrolling to the top, the list's end) aren't saved.
  * - candidates.tsv: `id completed category version name description` — the local achievement list.
  * - report.txt: the scan report, readable and tab-separated.
  */

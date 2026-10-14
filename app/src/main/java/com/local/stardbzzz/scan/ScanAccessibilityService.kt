@@ -153,7 +153,13 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
                     secondary.bind("退出") { coordinator.endSession() }
                 }
                 is ScanState.Running -> {
-                    status.text = "第 ${state.progress.pages} 屏 · 已读 ${state.progress.rows} 条"
+                    val progress = state.progress
+                    status.text = if (progress.capturing) {
+                        "已截 ${progress.queued} 屏 · 已读 ${progress.rows} 条"
+                    } else {
+                        // The game is no longer touched; the rest is OCR of the queued pages.
+                        "截图完成，可切走 · 识别 ${progress.read}/${progress.queued}"
+                    }
                     primary.bind("停止") { coordinator.stop() }
                     secondary.bind(null) {}
                 }

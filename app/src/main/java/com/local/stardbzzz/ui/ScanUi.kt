@@ -105,7 +105,7 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
             item {
                 Text(
                     text = "自动切换游戏成就页的各个分类并滑动列表，识别每条成就的完成状态，与本地数据对比后由你确认同步。" +
-                        "扫描期间不要触碰屏幕；成就较多时可能需要 10 分钟左右。",
+                        "截图期间不要触碰屏幕；悬浮窗显示「截图完成」后就可以切到其他 App，识别会在后台继续。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -373,10 +373,14 @@ private fun ScanState.description(): String = when (this) {
     ScanState.Idle -> "授权屏幕录制后，切换到游戏的成就页，点击悬浮窗的「开始」。"
     ScanState.Ready -> "已就绪：切换到游戏的成就页，点击悬浮窗的「开始」。"
     is ScanState.Running -> buildString {
-        append("扫描中")
-        progress.tab?.let { append(" · ").append(it) }
-        progress.category?.let { append(" / ").append(it) }
-        append(" · 已读 ${progress.rows} 条")
+        if (progress.capturing) {
+            append("扫描中")
+            progress.tab?.let { append(" · ").append(it) }
+            progress.category?.let { append(" / ").append(it) }
+        } else {
+            append("截图完成，可以切到其他 App；正在识别")
+        }
+        append(" · 已识别 ${progress.read}/${progress.queued} 屏，读到 ${progress.rows} 条")
     }
     is ScanState.Finished -> "扫描完成，结果见下方。"
     is ScanState.Failed -> "扫描失败：$message"

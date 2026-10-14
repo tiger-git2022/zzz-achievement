@@ -278,12 +278,19 @@ class ScanReportTest {
             listOf(
                 candidate("m", "梦魇的梦魇", "", "敌对目标"),
                 candidate("f", "风起云涌Ⅰ", "", "战斗成就"),
+                candidate("d", "如越山峦叠嶂", "", "勘域探境"),
+                candidate("y", "营业时间", "", "勘域探境"),
             ),
         )
 
         // Two swapped characters in five: a plain edit distance (0.6) would reject this.
         assertEquals("m", local.match("梦魔的梦魔", "", "敌对目标")?.id)
         assertEquals("f", local.match("凤起云涌|", "", "战斗成就")?.id)
+        // Read both ways in the second phone run.
+        assertEquals("d", local.match("如越山峦營峰", "", "勘域探境")?.id)
+        assertEquals("d", local.match("如越山峦參峰", "", "勘域探境")?.id)
+        // 營 is also the traditional form of 营, which still matches as itself.
+        assertEquals("y", local.match("營业时间", "", "勘域探境")?.id)
         // Two unrelated characters are still too many.
         assertNull(local.match("梦话的梦想", "", "敌对目标"))
     }

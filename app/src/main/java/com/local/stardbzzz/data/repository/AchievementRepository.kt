@@ -92,16 +92,22 @@ class AchievementRepository(
                 }
                 if (completedCategories.isNotEmpty()) put(CompletedCategory, completedCategories.sorted())
             }
-            val showingPinned = filter.primaryCategory == PinnedCategory
-            val showingCompleted = filter.primaryCategory == CompletedCategory
-            val selectedPrimary = filter.primaryCategory.ifBlank { categoryGroups.keys.firstOrNull().orEmpty() }
+            // A saved selection can name a column or category that no longer exists, e.g. 其他 / 罗斯凯利法 after
+            // a refresh moves 罗斯凯利法 to 城市; it would show an empty list, so treat it as no selection.
+            val savedPrimary = filter.primaryCategory.takeIf {
+                it.isBlank() || it == PinnedCategory || it == CompletedCategory || it in primaryCategories
+            }.orEmpty()
+            val showingPinned = savedPrimary == PinnedCategory
+            val showingCompleted = savedPrimary == CompletedCategory
+            val selectedPrimary = savedPrimary.ifBlank { categoryGroups.keys.firstOrNull().orEmpty() }
             val categories = achievements
                 .filter { !showingPinned && (showingCompleted || selectedPrimary.isBlank() || it.primaryCategory == selectedPrimary) }
                 .map { it.category }
                 .filter { it.isNotBlank() }
                 .distinct()
                 .let { values -> if (showingCompleted) values.filter { it in completedCategories } else values }
-            val selectedCategory = filter.category.ifBlank { categories.firstOrNull().orEmpty() }
+            val savedCategory = filter.category.takeIf { showingPinned || it.isBlank() || it in categories }.orEmpty()
+            val selectedCategory = savedCategory.ifBlank { categories.firstOrNull().orEmpty() }
             val filtered = (if (filter.search.isNotBlank()) {
                 achievements.filter { item ->
                     item.name.contains(filter.search, ignoreCase = true) ||
@@ -137,7 +143,7 @@ class AchievementRepository(
                     .filter { it.isNotBlank() }
                     .distinct()
                     .sortedWith(compareByDescending<String> { it.removePrefix("V").removePrefix("v").toFloatOrNull() ?: 0f }),
-                filter = filter,
+                filter = filter.copy(primaryCategory = savedPrimary, category = savedCategory),
                 completedCount = achievements.count { it.isCompleted },
                 totalCount = achievements.size,
             )

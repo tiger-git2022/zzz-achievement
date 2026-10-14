@@ -11,11 +11,16 @@ data class ScanCandidate(
     val description: String,
     val category: String,
     val isCompleted: Boolean,
-    /** stardb can list one achievement under several ids; records with the same name, category and version are one. */
+    /**
+     * stardb can list one achievement under several ids; records with the same name, category, version and
+     * description are one. The description keeps apart different achievements that share a name.
+     */
     val version: String = "",
 ) {
-    val linkKey: Triple<String, String, String> get() = Triple(name, category, version)
+    val linkKey: LinkKey get() = LinkKey(name, category, version, AchievementMatcher.normalizeText(description))
 }
+
+data class LinkKey(val name: String, val category: String, val version: String, val description: String)
 
 /** One achievement row as seen in the game, with the sidebar category it was listed under. */
 data class ObservedRow(

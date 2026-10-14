@@ -109,6 +109,25 @@ class ScanReportTest {
     }
 
     @Test
+    fun countsSameNameAchievementsWithDifferentDescriptionsSeparately() {
+        val candidates = listOf(
+            candidate("5", "公平竞争制度", "救出所有走失的邦布商人。", "空洞探索指南", completed = true),
+            candidate("6", "公平竞争制度", "在其他关卡中完成挑战。", "空洞探索指南", completed = true),
+            // stardb listing achievement 5 a second time.
+            candidate("5b", "公平竞争制度", "救出所有走失的邦布商人", "空洞探索指南", completed = true),
+        )
+        val observed = listOf(
+            ObservedRow("探索", "空洞探索指南", "公平竞争制度", "救出所有走失的邦布商人。", RowStatus.Completed("2026-06-25")),
+        )
+
+        val report = ScanReportBuilder.build(observed, candidates, gameCompletedCount = null)
+
+        assertEquals(2, report.localCompletedCount)
+        assertEquals(1, report.gameCompletedSeen)
+        assertEquals(listOf("6"), report.localCompletedNotSeen.map { it.id })
+    }
+
+    @Test
     fun foldsTraditionalAndLookAlikeCharacters() {
         // Unmatched in the second phone run: 採/探, 來/来, 樹/树, 購/购, カ/力.
         val readings = AchievementMatcher(

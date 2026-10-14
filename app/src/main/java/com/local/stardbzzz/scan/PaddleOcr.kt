@@ -71,7 +71,7 @@ class PaddleOcr(detModel: ByteArray, recModel: ByteArray, dictionary: String, th
     fun detect(image: RgbImage): List<TextBox> {
         val (inputWidth, inputHeight) = detInputSize(image.width, image.height)
         val input = FloatArray(3 * inputWidth * inputHeight)
-        writeBgr(image, 0, 0, image.width, image.height, inputWidth, inputHeight, inputWidth, input)
+        writeBgr(image, 0, 0, image.width, image.height, inputWidth, inputHeight, inputWidth, input, DetNormalization)
         val probability = run(detector, input, longArrayOf(1, 3, inputHeight.toLong(), inputWidth.toLong()))
         return DbPostProcess.boxes(probability, inputWidth, inputHeight, image.width, image.height)
             .sortedWith(compareBy<TextBox> { it.top }.thenBy { it.left })
@@ -83,7 +83,7 @@ class PaddleOcr(detModel: ByteArray, recModel: ByteArray, dictionary: String, th
         // Narrow lines are padded to the width the model was trained on, as PaddleOCR does.
         val inputWidth = max(RecMinWidth, resizedWidth)
         val input = FloatArray(3 * RecHeight * inputWidth)
-        writeBgr(image, box.left, box.top, box.width, box.height, resizedWidth, RecHeight, inputWidth, input)
+        writeBgr(image, box.left, box.top, box.width, box.height, resizedWidth, RecHeight, inputWidth, input, RecNormalization)
         val output = run(recognizer, input, longArrayOf(1, 3, RecHeight.toLong(), inputWidth.toLong()))
         return CtcDecoder.decode(output, characters)
     }
@@ -121,10 +121,19 @@ class PaddleOcr(detModel: ByteArray, recModel: ByteArray, dictionary: String, th
             return fit(width) to fit(height)
         }
 
+        /** Per channel (B, G, R) mean and standard deviation of 0..1 pixel values, as in the models' training configs. */
+        class Normalization(val mean: FloatArray, val std: FloatArray)
+
+        /** PP-OCRv6 small detection: ImageNet statistics, applied in the image's BGR channel order as PaddleOCR does. */
+        val DetNormalization = Normalization(floatArrayOf(0.485f, 0.456f, 0.406f), floatArrayOf(0.229f, 0.224f, 0.225f))
+
+        /** Recognition: -1..1. */
+        val RecNormalization = Normalization(floatArrayOf(0.5f, 0.5f, 0.5f), floatArrayOf(0.5f, 0.5f, 0.5f))
+
         /**
          * Writes the region (left, top, regionWidth x regionHeight) of [image], bilinearly resized to
-         * [outWidth] x [outHeight], into [out] as CHW planes of B, G, R scaled to -1..1, each row [rowStride]
-         * wide (the rest stays 0, the padding).
+         * [outWidth] x [outHeight], into [out] as CHW planes of B, G, R normalized by [normalization], each row
+         * [rowStride] wide (the rest stays 0, the padding).
          */
         fun writeBgr(
             image: RgbImage,
@@ -136,6 +145,7 @@ class PaddleOcr(detModel: ByteArray, recModel: ByteArray, dictionary: String, th
             outHeight: Int,
             rowStride: Int,
             out: FloatArray,
+            normalization: Normalization,
         ) {
             val plane = rowStride * outHeight
             val scaleX = regionWidth.toFloat() / outWidth
@@ -165,15 +175,18 @@ class PaddleOcr(detModel: ByteArray, recModel: ByteArray, dictionary: String, th
                     val p10 = image.pixels[row1 + xs0[x]]
                     val p11 = image.pixels[row1 + xs1[x]]
                     val index = y * rowStride + x
-                    // ARGB: blue in bits 0-7, green 8-15, red 16-23.
-                    out[index] = lerp(p00, p01, p10, p11, 0, wx[x], wy)
-                    out[plane + index] = lerp(p00, p01, p10, p11, 8, wx[x], wy)
-                    out[2 * plane + index] = lerp(p00, p01, p10, p11, 16, wx[x], wy)
+                    for (channel in 0..2) {
+                        val value = lerp(p00, p01, p10, p11, ChannelShifts[channel], wx[x], wy)
+                        out[channel * plane + index] = (value / 255f - normalization.mean[channel]) / normalization.std[channel]
+                    }
                 }
             }
         }
 
-        /** One channel of four neighboring pixels, interpolated and scaled from 0..255 to -1..1. */
+        /** ARGB bit offsets of blue, green and red. */
+        private val ChannelShifts = intArrayOf(0, 8, 16)
+
+        /** One channel (0..255) of four neighboring pixels, interpolated. */
         private fun lerp(p00: Int, p01: Int, p10: Int, p11: Int, shift: Int, wx: Float, wy: Float): Float {
             val c00 = (p00 shr shift and 0xFF).toFloat()
             val c01 = (p01 shr shift and 0xFF).toFloat()
@@ -181,7 +194,7 @@ class PaddleOcr(detModel: ByteArray, recModel: ByteArray, dictionary: String, th
             val c11 = (p11 shr shift and 0xFF).toFloat()
             val top = c00 + (c01 - c00) * wx
             val bottom = c10 + (c11 - c10) * wx
-            return (top + (bottom - top) * wy) / 127.5f - 1f
+            return top + (bottom - top) * wy
         }
     }
 }

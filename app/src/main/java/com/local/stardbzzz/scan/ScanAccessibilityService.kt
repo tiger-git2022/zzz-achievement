@@ -66,21 +66,30 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
 
     override suspend fun tap(point: ScreenPoint) {
         val (x, y) = toPixels(point)
-        dispatchOrFail(Path().apply { moveTo(x, y) }, TapMillis)
+        dispatchOrFail(GestureDescription.StrokeDescription(Path().apply { moveTo(x, y) }, 0, TapMillis))
     }
 
-    override suspend fun swipe(from: ScreenPoint, to: ScreenPoint, durationMillis: Long) {
+    override suspend fun swipe(from: ScreenPoint, to: ScreenPoint, durationMillis: Long, holdMillis: Long) {
         val (startX, startY) = toPixels(from)
         val (endX, endY) = toPixels(to)
-        dispatchOrFail(Path().apply { moveTo(startX, startY); lineTo(endX, endY) }, durationMillis.coerceAtLeast(1))
+        val drag = Path().apply { moveTo(startX, startY); lineTo(endX, endY) }
+        if (holdMillis <= 0) {
+            dispatchOrFail(GestureDescription.StrokeDescription(drag, 0, durationMillis.coerceAtLeast(1)))
+            return
+        }
+        // The same finger stays on the end point before lifting, so it lets go at rest and the list stops where
+        // the drag ended instead of flinging on by however fast the last touch events happened to arrive.
+        val stroke = GestureDescription.StrokeDescription(drag, 0, durationMillis.coerceAtLeast(1), true)
+        dispatchOrFail(stroke)
+        dispatchOrFail(stroke.continueStroke(Path().apply { moveTo(endX, endY) }, 0, holdMillis, false))
     }
 
     /**
      * A gesture the system cancelled (usually because the screen was touched) means the page may have
      * changed under the scan; retrying could attribute rows to the wrong category, so stop instead.
      */
-    private suspend fun dispatchOrFail(path: Path, durationMillis: Long) {
-        if (!dispatch(path, durationMillis)) throw IllegalStateException("自动操作被系统取消，扫描期间请不要触碰屏幕")
+    private suspend fun dispatchOrFail(stroke: GestureDescription.StrokeDescription) {
+        if (!dispatch(stroke)) throw IllegalStateException("自动操作被系统取消，扫描期间请不要触碰屏幕")
     }
 
     private fun toPixels(point: ScreenPoint): Pair<Float, Float> {
@@ -88,10 +97,8 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
         return point.x * size.x to point.y * size.y
     }
 
-    private suspend fun dispatch(path: Path, durationMillis: Long): Boolean = withContext(Dispatchers.Main) {
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMillis))
-            .build()
+    private suspend fun dispatch(stroke: GestureDescription.StrokeDescription): Boolean = withContext(Dispatchers.Main) {
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
         suspendCancellableCoroutine { continuation ->
             val callback = object : AccessibilityService.GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {

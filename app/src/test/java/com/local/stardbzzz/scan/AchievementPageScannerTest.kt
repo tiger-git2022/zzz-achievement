@@ -11,7 +11,7 @@ class AchievementPageScannerTest {
     fun readsOnlyTheFirstPageWholeAndQueuesEachListPageOnce() = runBlocking {
         val game = FakeGame(GameScreenParser.TabNames.associateWith { tab -> listOf("${tab}分类" to rows(tab, 8)) })
 
-        val capture = AchievementPageScanner(game, game, ScanTimings.None).scan()
+        val capture = AchievementPageScanner(game, game, ScanTimings.None.copy(holdMillis = 200)).scan()
 
         // The rows come from the queued pages alone, and every row was collected.
         assertEquals(capture.rows.map { it.name }, game.keptReads.flatMap { GameScreenParser.parse(it).rows }.map { it.name })
@@ -20,6 +20,10 @@ class AchievementPageScannerTest {
         assertEquals(4 * 2, game.keptReads.size)
         // Tabs and 完成数 come from one whole-page read; scrolling is judged from thumbnails, not OCR.
         assertEquals(1, game.wholeReads)
+        // Page-by-page swipes rest before lifting so the list can't fling past a page; flings back to the top don't.
+        val (forward, back) = game.swipeHolds.partition { it.first.first }
+        assertTrue(forward.isNotEmpty() && forward.all { it.second == 200L })
+        assertTrue(back.isNotEmpty() && back.all { it.second == 0L })
     }
 
     @Test
@@ -222,6 +226,9 @@ class AchievementPageScannerTest {
         var wholeReads = 0
             private set
         val keptReads = mutableListOf<List<OcrBox>>()
+
+        /** (forward, sidebar) of each swipe, with how long it rested before lifting. */
+        val swipeHolds = mutableListOf<Pair<Pair<Boolean, Boolean>, Long>>()
         var gesturesAfterLeaving = 0
             private set
         private var captures = 0
@@ -325,10 +332,11 @@ class AchievementPageScannerTest {
             }
         }
 
-        override suspend fun swipe(from: ScreenPoint, to: ScreenPoint, durationMillis: Long) {
+        override suspend fun swipe(from: ScreenPoint, to: ScreenPoint, durationMillis: Long, holdMillis: Long) {
             if (left) gesturesAfterLeaving++
             swipes++
             val forward = from.y > to.y
+            swipeHolds += (forward to (from.x < 0.25f)) to holdMillis
             if (from.x < 0.25f) {
                 val max = (categories.size - VisibleLabels).coerceAtLeast(0)
                 sidebarOffset = (sidebarOffset + if (forward) 3 else -3).coerceIn(0, max)

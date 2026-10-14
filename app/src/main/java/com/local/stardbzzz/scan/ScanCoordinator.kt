@@ -253,7 +253,7 @@ class ScanCoordinator(
             val listHeader = buildString {
                 appendLine("本地成就列表\t${list.total} 条，最新版本 ${list.latestVersion ?: "未知"}")
                 appendLine("列表更新时间\t${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(Date(list.refreshedAtEpochMillis))}")
-                appendLine("stardb 同组连带标记已完成\t${list.completedViaGroup}")
+                appendLine("同组另一分支已完成（不算完成）\t${list.completedViaGroup}")
             }
             runCatching { File(dir, ScanDebugFiles.Report).writeText(listHeader + ScanDebugFiles.reportText(report)) }
         }

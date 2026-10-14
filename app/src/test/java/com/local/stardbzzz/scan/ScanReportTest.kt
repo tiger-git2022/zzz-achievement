@@ -244,6 +244,27 @@ class ScanReportTest {
     }
 
     @Test
+    fun aRowWhoseDescriptionWasDroppedDoesNotSwallowDifferentSameNameRows() {
+        fun row(description: String) =
+            ObservedRow("探索", "空洞探索指南", "没有收录的成就", description, RowStatus.Completed(null))
+
+        // The description line missing on the first page must not make the two achievements below one.
+        val ambiguous = ScanReportBuilder.build(
+            listOf(row(""), row("救出所有走失的邦布商人。"), row("在其他关卡中完成挑战。")),
+            candidates,
+            gameCompletedCount = null,
+        )
+        assertEquals(listOf("救出所有走失的邦布商人。", "在其他关卡中完成挑战。"), ambiguous.unmatched.map { it.description })
+        assertEquals(2, ambiguous.gameCompletedSeen)
+
+        // With one same-name row it is that row; with none it counts once however often it is read.
+        val single = ScanReportBuilder.build(listOf(row(""), row("救出所有走失的邦布商人。")), candidates, gameCompletedCount = null)
+        assertEquals(1, single.gameCompletedSeen)
+        val blankOnly = ScanReportBuilder.build(listOf(row(""), row("")), candidates, gameCompletedCount = null)
+        assertEquals(1, blankOnly.unmatched.size)
+    }
+
+    @Test
     fun matchesEitherNameOfASlashPair() {
         val pair = AchievementMatcher(listOf(candidate("p", "执事的晚安/晚安大小姐", "", "代理人秘闻")))
 

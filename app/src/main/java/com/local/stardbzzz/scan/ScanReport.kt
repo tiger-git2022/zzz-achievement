@@ -286,14 +286,12 @@ object ScanReportBuilder {
         val matcher = AchievementMatcher(candidates)
         // The same row is usually captured on two consecutive pages. Match every reading first and merge by
         // the matched achievement, so same-name achievements told apart by description stay separate.
-        val unmatched = mutableListOf<ObservedRow>()
+        val unmatchedReads = mutableListOf<ObservedRow>()
         val statusById = linkedMapOf<String, Pair<ScanCandidate, ObservedRow>>()
         observed.forEach { row ->
             val candidate = matcher.match(row.name, row.description, row.category)
             if (candidate == null) {
-                // The same row read on another page has the same name and a similar description; a different
-                // achievement with the same name has a different description and counts on its own.
-                if (unmatched.none { sameUnmatchedRow(it, row) }) unmatched += row
+                unmatchedReads += row
                 return@forEach
             }
             val existing = statusById[candidate.id]
@@ -301,6 +299,8 @@ object ScanReportBuilder {
                 statusById[candidate.id] = candidate to row
             }
         }
+
+        val unmatched = mergeUnmatched(unmatchedReads)
 
         val diffs = statusById.values.mapNotNull { (candidate, row) ->
             val completedInGame = row.status is RowStatus.Completed
@@ -350,14 +350,33 @@ object ScanReportBuilder {
             full.length > name.length && (full.endsWith(name) || full.startsWith(name))
         }
 
+    /**
+     * Unmatched reads merged into rows. The same row read on another page has the same name and a similar
+     * description; a different achievement with the same name has a different description and counts on its own.
+     * A read whose description OCR dropped joins a same-name row whichever it is: if there are several, it is one
+     * of them, and counting it again would count an achievement twice.
+     */
+    private fun mergeUnmatched(reads: List<ObservedRow>): List<ObservedRow> {
+        val (blank, described) = reads.partition { AchievementMatcher.normalizeText(it.description).isEmpty() }
+        val rows = mutableListOf<ObservedRow>()
+        described.forEach { row -> if (rows.none { sameUnmatchedRow(it, row) }) rows += row }
+        blank.forEach { row -> if (rows.none { samePlaceAndName(it, row) }) rows += row }
+        return rows.sortedBy { reads.indexOf(it) }
+    }
+
+    private fun samePlaceAndName(a: ObservedRow, b: ObservedRow): Boolean =
+        a.tab == b.tab &&
+            AchievementMatcher.normalizeText(a.category) == AchievementMatcher.normalizeText(b.category) &&
+            AchievementMatcher.normalizeText(a.name) == AchievementMatcher.normalizeText(b.name)
+
+    /** Two reads with descriptions: the same row if name, description numbers and (similar) text agree. */
     private fun sameUnmatchedRow(a: ObservedRow, b: ObservedRow): Boolean {
-        if (a.tab != b.tab || AchievementMatcher.normalizeText(a.category) != AchievementMatcher.normalizeText(b.category)) return false
-        if (AchievementMatcher.normalizeText(a.name) != AchievementMatcher.normalizeText(b.name)) return false
+        if (!samePlaceAndName(a, b)) return false
         if (AchievementMatcher.numbersIn(a.description) != AchievementMatcher.numbersIn(b.description)) return false
-        val descriptionA = AchievementMatcher.normalizeText(a.description)
-        val descriptionB = AchievementMatcher.normalizeText(b.description)
-        return descriptionA.isEmpty() || descriptionB.isEmpty() ||
-            AchievementMatcher.similarity(descriptionA, descriptionB) >= SameDescription
+        return AchievementMatcher.similarity(
+            AchievementMatcher.normalizeText(a.description),
+            AchievementMatcher.normalizeText(b.description),
+        ) >= SameDescription
     }
 
     /** OCR of one description varies by a character or two between frames; different achievements differ more. */

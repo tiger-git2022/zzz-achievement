@@ -224,10 +224,11 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
 
         /**
          * Pairs of characters OCR swaps for each other often enough that a swap shouldn't cost a full edit
-         * (梦魇 read as 梦魔, 风起 as 凤起, 叱咤 as 比咤, 迷宫 as 迷官, 枯萎 as 枯藝/枯菱, ...).
+         * (梦魇 read as 梦魔, 风起 as 凤起, 叱咤 as 比咤, 迷宫 as 迷官, 枯萎 as 枯藝/枯菱, 叠嶂 as 營峰/參峰, ...).
+         * Kept out of [OcrConfusables] when the misread is a real character too: 营 and 参 appear in the game.
          */
         private val LookAlikes: Set<Pair<Char, Char>> = listOf(
-            "魇魔", "风凤", "叱比", "宫官", "萎藝", "萎菱", "天夭", "借惜", "合台", "门们",
+            "魇魔", "风凤", "叱比", "宫官", "萎藝", "萎菱", "天夭", "借惜", "合台", "门们", "叠營", "叠參", "嶂峰",
         ).flatMap { pair -> listOf(pair[0] to pair[1], pair[1] to pair[0]) }.toSet()
         private const val LookAlikeCost = 0.3
 

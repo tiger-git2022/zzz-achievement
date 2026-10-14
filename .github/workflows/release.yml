@@ -119,6 +119,20 @@ jobs:
           git log --no-merges --max-count=50 --pretty='- %s (%h)' $range >> notes.md
           cat notes.md
 
+      # The app reads this from /releases/latest/download/update.json: release downloads have no request
+      # limit, unlike api.github.com (60 requests an hour per IP without login, often used up on mobile networks).
+      - name: Write update manifest
+        run: |
+          apk=$(ls dist/*.apk | head -n 1)
+          jq -n \
+            --arg tag "v${VERSION_NAME}" \
+            --rawfile notes notes.md \
+            --arg name "$(basename "$apk")" \
+            --argjson size "$(stat -c %s "$apk")" \
+            --arg sha256 "$(sha256sum "$apk" | cut -d ' ' -f 1)" \
+            '{tag_name: $tag, body: $notes, apk: {name: $name, size: $size, sha256: $sha256}}' > dist/update.json
+          cat dist/update.json
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -131,7 +145,7 @@ jobs:
           else
             latest_flag="--latest"
           fi
-          gh release create "v${VERSION_NAME}" dist/*.apk \
+          gh release create "v${VERSION_NAME}" dist/*.apk dist/update.json \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "v${VERSION_NAME}" \

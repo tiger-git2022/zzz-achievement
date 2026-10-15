@@ -197,7 +197,7 @@ class ScanCoordinator(
                 localCompletedCount = ScanReportBuilder.completedAchievements(candidates),
                 localCompletedRecords = candidates.count { it.isCompleted },
                 localCompletedNotSeen = report.localCompletedNotSeen.filter { notSeen ->
-                    candidates.any { it.linkKey == notSeen.linkKey && it.isCompleted }
+                    candidates.any { it.countKey == notSeen.countKey && it.isCompleted }
                 },
                 diffs = report.diffs.filterNot { it.id in applied },
             )
@@ -283,7 +283,7 @@ class ScanCoordinator(
             val listHeader = buildString {
                 appendLine("本地成就列表\t${list.total} 条，最新版本 ${list.latestVersion ?: "未知"}")
                 appendLine("列表更新时间\t${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(Date(list.refreshedAtEpochMillis))}")
-                appendLine("同组另一分支已完成（不算完成）\t${list.completedViaGroup}")
+                appendLine("同组另一分支已完成（隐藏，整组算一条）\t${list.completedViaGroup}")
             }
             runCatching { File(dir, ScanDebugFiles.Report).writeText(listHeader + ScanDebugFiles.reportText(report)) }
         }

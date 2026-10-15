@@ -135,6 +135,7 @@ private fun Map<*, *>.toAchievements(): List<AchievementDto> {
             val completeId = group["complete"]?.toString()
             val groupName = group.displayName()
             val achievements = group["achievements"] as? List<*> ?: emptyList<Any?>()
+            val groupKey = if (achievements.size > 1) (achievements.first() as? Map<*, *>)?.get("id")?.toString().orEmpty() else ""
             achievements.mapNotNull { achievementItem ->
                 val achievement = achievementItem as? Map<*, *> ?: return@mapNotNull null
                 if (achievement["impossible"] == true) return@mapNotNull null
@@ -152,6 +153,7 @@ private fun Map<*, *>.toAchievements(): List<AchievementDto> {
                     // A group lists alternative achievements (story branches); stardb records the one completed.
                     completed = completeId != null && sameId(completeId, id),
                     completedViaGroup = viaGroup,
+                    group = groupKey,
                 )
             }
         }
@@ -170,6 +172,7 @@ private fun JSONObject.toAchievements(): List<AchievementDto> {
             val completeId = group.opt("complete")?.takeUnless { it == JSONObject.NULL }?.toString()
             val groupName = group.displayName()
             val achievements = group.optJSONArray("achievements") ?: return@flatMap emptyList()
+            val groupKey = if (achievements.length() > 1) achievements.optJSONObject(0)?.opt("id")?.toString().orEmpty() else ""
             (0 until achievements.length()).mapNotNull { achievementIndex ->
                 val achievement = achievements.optJSONObject(achievementIndex) ?: return@mapNotNull null
                 if (achievement.optBoolean("impossible", false)) return@mapNotNull null
@@ -187,6 +190,7 @@ private fun JSONObject.toAchievements(): List<AchievementDto> {
                     // A group lists alternative achievements (story branches); stardb records the one completed.
                     completed = completeId != null && sameId(completeId, id),
                     completedViaGroup = viaGroup,
+                    group = groupKey,
                 )
             }
         }

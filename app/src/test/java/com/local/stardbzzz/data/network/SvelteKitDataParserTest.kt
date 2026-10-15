@@ -22,6 +22,10 @@ class SvelteKitDataParserTest {
         assertEquals(true, achievements.getValue(1005031).completed)
         assertEquals(false, achievements.getValue(1005031).completedViaGroup)
         assertEquals("战场「出片」指南", achievements.getValue(1005031).name)
+        // Both branches name their group after its first member; groups of one have none.
+        assertEquals(achievements.getValue(1005030).id, achievements.getValue(1005030).group)
+        assertEquals(achievements.getValue(1005030).id, achievements.getValue(1005031).group)
+        assertEquals("", achievements.getValue(1005001).group)
         // Series 1005 (法厄同纪事) is on the 故事 tab.
         assertEquals(setOf("故事"), achievements.values.map { it.primaryCategory }.toSet())
     }

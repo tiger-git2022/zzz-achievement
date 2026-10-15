@@ -97,4 +97,9 @@ data class AchievementDto(
      * achievements and its `complete` names the one completed. Counted for the scan report.
      */
     val completedViaGroup: Boolean = false,
+    /**
+     * The stardb group of alternative achievements this one belongs to, named by the group's first member id;
+     * blank for a group of one. The game counts a group as one achievement, done once any member is.
+     */
+    val group: String = "",
 )

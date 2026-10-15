@@ -16,8 +16,13 @@ data class ScanCandidate(
      * description are one. The description keeps apart different achievements that share a name.
      */
     val version: String = "",
+    /** The stardb group of alternative story branches, blank for most: the game counts the group as one. */
+    val group: String = "",
 ) {
     val linkKey: LinkKey get() = LinkKey(name, category, version, AchievementMatcher.normalizeText(description))
+
+    /** What counts as one achievement: its group of story branches, or the records listing it. */
+    val countKey: Any get() = group.ifBlank { null } ?: linkKey
 }
 
 data class LinkKey(val name: String, val category: String, val version: String, val description: String)
@@ -306,9 +311,14 @@ object ScanReportBuilder {
 
         val unmatched = mergeUnmatched(unmatchedReads)
 
+        val doneGroups = candidates.filter { it.isCompleted && it.group.isNotBlank() }.map { it.group }.toMutableSet()
         val diffs = statusById.values.mapNotNull { (candidate, row) ->
             val completedInGame = row.status is RowStatus.Completed
             if (completedInGame == candidate.isCompleted) return@mapNotNull null
+            // Another branch of its group is completed locally, or by an earlier diff, so the group already counts
+            // as done.
+            if (completedInGame && candidate.group in doneGroups) return@mapNotNull null
+            if (completedInGame && candidate.group.isNotBlank()) doneGroups += candidate.group
             ScanDiff(
                 id = candidate.id,
                 name = candidate.name,
@@ -323,14 +333,14 @@ object ScanReportBuilder {
         val localNames = candidates.flatMap { nameVariants(it.name) }.map { AchievementMatcher.normalizeText(it) }.toSet()
         val (clipped, unmatchedRows) = unmatched.partition { row -> isClippedName(AchievementMatcher.normalizeText(row.name), localNames) }
 
-        val seenLinks = statusById.values.map { it.first.linkKey }.toSet()
+        val seenKeys = statusById.values.map { it.first.countKey }.toSet()
         val completedSeen = statusById.values
             .filter { it.second.status is RowStatus.Completed }
-            .map { it.first.linkKey }
+            .map { it.first.countKey }
             .distinct().size + unmatchedRows.count { it.status is RowStatus.Completed }
         val notSeen = candidates
-            .filter { it.isCompleted && it.linkKey !in seenLinks }
-            .distinctBy { it.linkKey }
+            .filter { it.isCompleted && it.countKey !in seenKeys }
+            .distinctBy { it.countKey }
             .sortedWith(compareBy({ it.category }, { it.name }))
 
         return ScanReport(
@@ -386,9 +396,9 @@ object ScanReportBuilder {
     /** OCR of one description varies by a character or two between frames; different achievements differ more. */
     private const val SameDescription = 0.7
 
-    /** Completed achievements, counting records that list the same achievement once. */
+    /** Completed achievements, counting records that list the same achievement, or branches of one group, once. */
     fun completedAchievements(candidates: List<ScanCandidate>): Int =
-        candidates.filter { it.isCompleted }.map { it.linkKey }.distinct().size
+        candidates.filter { it.isCompleted }.map { it.countKey }.distinct().size
 
     private fun RowStatus.label(): String = when (this) {
         is RowStatus.Completed -> date?.let { "已完成（$it）" } ?: "已完成"

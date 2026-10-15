@@ -355,6 +355,16 @@ class ScanReportTest {
         assertEquals(1, covered.localCompletedCount)
         assertEquals(1, covered.gameCompletedSeen)
 
+        // a is done locally but in progress in the game, b completed there: the group is done in both places,
+        // so a isn't uncompleted (which would leave the group open).
+        val switched = listOf(
+            ObservedRow("故事", "法厄同纪事", "战场「出片」指南", explode, RowStatus.InProgress(0, 1)),
+            ObservedRow("故事", "法厄同纪事", "战场「出片」指南", hurt, RowStatus.Completed(null)),
+        )
+        val kept = ScanReportBuilder.build(switched, branches(true), gameCompletedCount = null)
+        assertEquals(emptyList<ScanDiff>(), kept.diffs)
+        assertEquals(1, kept.localCompletedAfterSync)
+
         // Neither is done locally: one diff completes the group.
         val open = ScanReportBuilder.build(bothCompleted, branches(false), gameCompletedCount = null)
         assertEquals(listOf("a"), open.diffs.map { it.id })

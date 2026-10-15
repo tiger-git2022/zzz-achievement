@@ -312,9 +312,16 @@ object ScanReportBuilder {
         val unmatched = mergeUnmatched(unmatchedReads)
 
         val doneGroups = candidates.filter { it.isCompleted && it.group.isNotBlank() }.map { it.group }.toMutableSet()
+        val doneInGame = statusById.values
+            .filter { (candidate, row) -> row.status is RowStatus.Completed && candidate.group.isNotBlank() }
+            .map { it.first.group }
+            .toSet()
         val diffs = statusById.values.mapNotNull { (candidate, row) ->
             val completedInGame = row.status is RowStatus.Completed
             if (completedInGame == candidate.isCompleted) return@mapNotNull null
+            // The game shows another branch of its group completed: the group is done there too, so keep it done
+            // here rather than uncompleting the branch stardb records.
+            if (!completedInGame && candidate.group in doneInGame) return@mapNotNull null
             // Another branch of its group is completed locally, or by an earlier diff, so the group already counts
             // as done.
             if (completedInGame && candidate.group in doneGroups) return@mapNotNull null

@@ -10,7 +10,8 @@ import java.util.Locale
  * - frames.tsv: `frame tab category collected` — where the scanner was when it captured each frame, and whether the
  *   scan collected that frame's rows (1: a list page queued for OCR) or only navigated with it (0: the first page and
  *   sidebar reads). Frames the scan only compared by thumbnail (scrolling to the top, the list's end) aren't saved.
- * - candidates.tsv: `id completed category version name description` — the local achievement list.
+ * - candidates.tsv: `id completed category version name description group` — the local achievement list; older
+ *   sessions have no group column.
  * - report.txt: the scan report, readable and tab-separated.
  */
 object ScanDebugFiles {
@@ -57,15 +58,16 @@ object ScanDebugFiles {
                 candidate.version,
                 candidate.name,
                 candidate.description,
+                candidate.group,
             ).joinToString("\t", transform = ::clean)
         }
 
     fun parseCandidates(text: String): List<ScanCandidate> =
         text.lineSequence()
             .filter { it.isNotBlank() }
-            .map { it.split('\t', limit = 6) }
-            .filter { it.size == 6 }
-            .map { ScanCandidate(it[0], it[4], it[5], it[2], it[1] == "1", it[3]) }
+            .map { it.split('\t', limit = 7) }
+            .filter { it.size >= 6 }
+            .map { ScanCandidate(it[0], it[4], it[5], it[2], it[1] == "1", it[3], it.getOrNull(6).orEmpty()) }
             .toList()
 
     fun reportText(report: ScanReport): String = buildString {

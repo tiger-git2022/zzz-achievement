@@ -8,6 +8,8 @@ import com.local.stardbzzz.data.local.FilterState
 import com.local.stardbzzz.data.local.SecureCredentialStore
 import com.local.stardbzzz.data.local.SortMode
 import com.local.stardbzzz.data.local.SyncStatus
+import com.local.stardbzzz.data.local.countKey
+import com.local.stardbzzz.data.local.withoutCoveredBranches
 import com.local.stardbzzz.data.network.AchievementDto
 import com.local.stardbzzz.data.network.RngAchievementIconClient
 import com.local.stardbzzz.data.network.StardbApi
@@ -68,7 +70,8 @@ class AchievementRepository(
     private val remoteOperationMutex = Mutex()
 
     val screenState: Flow<AchievementScreenState> =
-        combine(dao.observeAll(), filterPreferences.state, retainedVisibleIds) { achievements, filter, retainedIds ->
+        combine(dao.observeAll(), filterPreferences.state, retainedVisibleIds) { all, filter, retainedIds ->
+            val achievements = all.withoutCoveredBranches(keep = retainedIds)
             val completedCategories = achievements
                 .filter { it.category.isNotBlank() }
                 .groupBy { it.category }
@@ -144,8 +147,8 @@ class AchievementRepository(
                     .distinct()
                     .sortedWith(compareByDescending<String> { it.removePrefix("V").removePrefix("v").toFloatOrNull() ?: 0f }),
                 filter = filter.copy(primaryCategory = savedPrimary, category = savedCategory),
-                completedCount = achievements.count { it.isCompleted },
-                totalCount = achievements.size,
+                completedCount = all.filter { it.isCompleted }.map { it.countKey }.distinct().size,
+                totalCount = all.map { it.countKey }.distinct().size,
             )
         }
 
@@ -223,8 +226,8 @@ class AchievementRepository(
         val all = dao.allSnapshot()
         val preferences = filterPreferences.state.first()
         return AchievementListInfo(
-            total = all.size,
-            completed = all.count { it.isCompleted },
+            total = all.map { it.countKey }.distinct().size,
+            completed = all.filter { it.isCompleted }.map { it.countKey }.distinct().size,
             latestVersion = all.map { it.version }
                 .filter { it.isNotBlank() }
                 .maxByOrNull { it.removePrefix("V").removePrefix("v").toFloatOrNull() ?: 0f },
@@ -234,7 +237,7 @@ class AchievementRepository(
     }
 
     suspend fun scanCandidates(): List<ScanCandidate> =
-        dao.allSnapshot().map { ScanCandidate(it.id, it.name, it.description, it.category, it.isCompleted, it.version) }
+        dao.allSnapshot().map { ScanCandidate(it.id, it.name, it.description, it.category, it.isCompleted, it.version, it.groupKey) }
 
     /** Applies completion states read from the game, then syncs them to stardb in one pass. */
     suspend fun applyScannedCompletion(changes: Map<String, Boolean>) {
@@ -410,6 +413,7 @@ class AchievementRepository(
         isCompleted = completed,
         syncStatus = SyncStatus.Synced,
         updatedAtEpochMillis = now,
+        groupKey = group,
     )
 
     private fun List<String>.sortedByPrimaryCategory(): List<String> =

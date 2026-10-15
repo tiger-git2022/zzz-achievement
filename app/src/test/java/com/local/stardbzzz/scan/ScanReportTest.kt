@@ -333,6 +333,34 @@ class ScanReportTest {
         assertEquals(2, report.gameCompletedSeen)
     }
 
+    /** Story branches of one stardb group: the game counts the group done once any branch is. */
+    @Test
+    fun countsAStoryBranchGroupAsOneAchievement() {
+        val explode = "面对结茧进化的基塔布鲁时，成功回避每一次爆炸冲击波并击破茧。"
+        val hurt = "面对结茧进化的基塔布鲁时，受到爆炸冲击波的伤害。"
+        val branches = { aDone: Boolean ->
+            listOf(
+                ScanCandidate("a", "战场「出片」指南", explode, "法厄同纪事", aDone, "3.1", group = "a"),
+                ScanCandidate("b", "战场「出片」指南", hurt, "法厄同纪事", false, "3.1", group = "a"),
+            )
+        }
+        val bothCompleted = listOf(
+            ObservedRow("故事", "法厄同纪事", "战场「出片」指南", explode, RowStatus.Completed(null)),
+            ObservedRow("故事", "法厄同纪事", "战场「出片」指南", hurt, RowStatus.Completed(null)),
+        )
+
+        // a is done locally: b completed in the game is the same group, not a difference.
+        val covered = ScanReportBuilder.build(bothCompleted, branches(true), gameCompletedCount = null)
+        assertEquals(emptyList<ScanDiff>(), covered.diffs)
+        assertEquals(1, covered.localCompletedCount)
+        assertEquals(1, covered.gameCompletedSeen)
+
+        // Neither is done locally: one diff completes the group.
+        val open = ScanReportBuilder.build(bothCompleted, branches(false), gameCompletedCount = null)
+        assertEquals(listOf("a"), open.diffs.map { it.id })
+        assertEquals(1, open.localCompletedAfterSync)
+    }
+
     private fun candidate(id: String, name: String, description: String, category: String, completed: Boolean = false) =
         ScanCandidate(id, name, description, category, completed)
 }

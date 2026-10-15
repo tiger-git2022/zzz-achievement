@@ -20,10 +20,25 @@ data class AchievementEntity(
     val isCompleted: Boolean,
     val syncStatus: SyncStatus,
     val updatedAtEpochMillis: Long,
+    /** The stardb group of alternative story-branch achievements, blank for most; see AchievementDto.group. */
+    @ColumnInfo(defaultValue = "")
+    val groupKey: String = "",
 )
+
+/** Counted as one achievement: the members of a stardb group of story branches are one. */
+val AchievementEntity.countKey: String get() = groupKey.ifBlank { id }
 
 enum class SyncStatus {
     Synced,
     Pending,
     Failed,
+}
+
+/**
+ * The list without story branches whose group another branch completed: they can no longer be earned and the game
+ * counts the group as done. Uncompleting that branch shows them again. [keep] stays shown, e.g. just toggled.
+ */
+fun List<AchievementEntity>.withoutCoveredBranches(keep: Set<String> = emptySet()): List<AchievementEntity> {
+    val doneGroups = filter { it.isCompleted && it.groupKey.isNotBlank() }.map { it.groupKey }.toSet()
+    return filter { it.isCompleted || it.groupKey !in doneGroups || it.id in keep }
 }

@@ -62,7 +62,7 @@ data class QuickCapture(
     /** Planned categories, and the ones the sidebar never showed. */
     val planned: Int,
     val notFound: List<QuickTask>,
-    /** Every planned category was read (or looked for), rather than stopping once enough were found. */
+    /** Every planned category was found and read to its end, rather than stopping once enough were found. */
     val readEverything: Boolean,
 )
 
@@ -220,7 +220,9 @@ class AchievementPageScanner(
                 delay(timings.afterSwipeMillis)
             }
         }
-        return QuickCapture(gameCompletedCount, reads, tasks.size, notFound, readEverything = true)
+        // A category not found, or read only part way (the page cap), may still hold what's missing.
+        val readEverything = notFound.isEmpty() && reads.all { it.complete }
+        return QuickCapture(gameCompletedCount, reads, tasks.size, notFound, readEverything)
     }
 
     /** Opens a category and reads its list from the top, page by page, to its end or (head only) its first date. */

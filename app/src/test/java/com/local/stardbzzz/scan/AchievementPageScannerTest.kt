@@ -235,6 +235,8 @@ class AchievementPageScannerTest {
 
         assertEquals(listOf(present), capture.reads.map { it.task })
         assertEquals(listOf(missing), capture.notFound)
+        // What's missing may be in the category not found: not everything was read.
+        assertFalse(capture.readEverything)
         // It looked through the sidebar a bounded number of times.
         assertTrue("swipes: ${game.swipes}", game.swipes < 30)
     }

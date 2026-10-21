@@ -10,10 +10,11 @@ package com.local.stardbzzz.scan
  */
 data class QuickSyncBaseline(
     /**
-     * The game's 完成数 minus the local completed count (achievements on the achievement page, counted once) as it
-     * would be with every completion the scan found applied. The two never quite agree (stardb lists some
-     * achievements twice, the game counts a few differently), but the gap stays put, so the next 完成数 tells how
-     * many achievements were completed since.
+     * The game's 完成数 minus the local completed count (achievements on the achievement page, counted once), less
+     * any completions still to be found. The two never quite agree (stardb lists some achievements twice, the game
+     * counts a few differently), but the gap stays put, so the next 完成数 tells how many achievements were
+     * completed since. It is taken against the local state when a scan ends, and moves with every change applied
+     * from its report ([QuickSync.baselineAfterApply]): differences left unapplied are then not counted as new.
      */
     val offset: Int,
     /** Local achievements the game listed as unfinished. */
@@ -134,19 +135,17 @@ object QuickSync {
         )
     }
 
-    /** The baseline after a full scan: what it read, as if every completion it found were applied. */
+    /** The baseline after a full scan: the gap as the local state stands, before any of its report is applied. */
     fun baselineAfterFullScan(candidates: List<ScanCandidate>, report: ScanReport): QuickSyncBaseline? {
         val count = report.gameCompletedCount ?: return null
-        return QuickSyncBaseline(
-            offset = count - localCompleted(candidates) - completionsOnPage(candidates, report),
-            inProgressIds = report.inProgressIds,
-        )
+        return QuickSyncBaseline(offset = count - localCompleted(candidates), inProgressIds = report.inProgressIds)
     }
 
     /**
      * The baseline after a 快速同步: achievements found done leave [QuickSyncBaseline.inProgressIds], ones read as
-     * unfinished join it (an agent you just got). The offset only moves when every planned category was read and the
-     * completions still fell short of 完成数: the rest can't be found this way, so the gap is taken as it is.
+     * unfinished join it (an agent you just got). What was found no longer counts as still to find. When every
+     * planned category was found and read to its end and the completions still fell short of 完成数, the rest can't
+     * be found this way, so the gap is taken as it stands.
      */
     fun baselineAfterQuickSync(
         candidates: List<ScanCandidate>,
@@ -157,27 +156,27 @@ object QuickSync {
         val summary = report.quick ?: return baseline
         val done = report.diffs.filter { it.markCompleted }.map { it.id }.toSet()
         val offset = if (readEverything && summary.found < summary.expectedNew && report.gameCompletedCount != null) {
-            report.gameCompletedCount - localCompleted(candidates) - summary.found
+            report.gameCompletedCount - localCompleted(candidates)
         } else {
-            baseline.offset
+            baseline.offset + summary.found
         }
         return QuickSyncBaseline(offset, baseline.inProgressIds - done + report.inProgressIds)
     }
+
+    /**
+     * The baseline once changes from a report were applied: the local completed count moved, and 完成数 didn't, so
+     * the gap moves with it. Whatever the user left unapplied stays out of the next count of new completions.
+     */
+    fun baselineAfterApply(
+        baseline: QuickSyncBaseline,
+        before: List<ScanCandidate>,
+        after: List<ScanCandidate>,
+    ): QuickSyncBaseline = baseline.copy(offset = baseline.offset - (localCompleted(after) - localCompleted(before)))
 
     /** Achievements on the page that can still be completed: not done, and no other branch of their group done. */
     private fun openAchievements(candidates: List<ScanCandidate>): List<ScanCandidate> {
         val doneGroups = candidates.filter { it.isCompleted && it.group.isNotBlank() }.map { it.group }.toSet()
         return candidates.filter { it.onAchievementPage && !it.isCompleted && it.group !in doneGroups }
-    }
-
-    /** Completions a report's diffs would add on the achievement page, counted like 完成数. */
-    private fun completionsOnPage(candidates: List<ScanCandidate>, report: ScanReport): Int {
-        val byId = candidates.associateBy { it.id }
-        return report.diffs.filter { it.markCompleted }
-            .mapNotNull { byId[it.id] }
-            .filter { it.onAchievementPage }
-            .map { it.countKey }
-            .distinct().size
     }
 
     private fun tasks(achievements: List<ScanCandidate>, headOnly: Boolean): List<QuickTask> =

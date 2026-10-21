@@ -145,20 +145,61 @@ class QuickSyncTest {
 
         val next = QuickSync.baselineAfterFullScan(candidates, report)!!
 
-        assertEquals(QuickSyncBaseline(offset = 1, inProgressIds = setOf("2", "6")), next)
-        // With 舞蹈练习生 applied, the same 完成数 means nothing new.
+        assertEquals(QuickSyncBaseline(offset = 2, inProgressIds = setOf("2", "6")), next)
+        // Nothing applied yet: the same 完成数 means nothing new.
+        assertEquals(0, QuickSync.expectedNew(candidates, next, 4))
+        // With 舞蹈练习生 applied, still nothing new.
         val applied = candidates.map { if (it.id == "1") it.copy(isCompleted = true) else it }
-        assertEquals(0, QuickSync.expectedNew(applied, next, 4))
+        val afterApply = QuickSync.baselineAfterApply(next, candidates, applied)
+        assertEquals(QuickSyncBaseline(offset = 1, inProgressIds = setOf("2", "6")), afterApply)
+        assertEquals(0, QuickSync.expectedNew(applied, afterApply, 4))
+    }
+
+    @Test
+    fun appliedUncompletionsDoNotLookLikeNewCompletions() {
+        // 相聚一刻！ is done locally but the game lists it unfinished; 完成数 is 1 (卫非地's 应算尽算).
+        val report = ScanReportBuilder.build(
+            listOf(row("故事", "际会之时", "相聚一刻！", RowStatus.InProgress(0, 1))),
+            candidates,
+            gameCompletedCount = 1,
+        )
+        assertTrue(report.diffs.any { it.id == "3" && !it.markCompleted })
+        val next = QuickSync.baselineAfterFullScan(candidates, report)!!
+
+        // Applied: 1 done locally, 完成数 1, nothing new.
+        val applied = candidates.map { if (it.id == "3") it.copy(isCompleted = false) else it }
+        assertEquals(0, QuickSync.expectedNew(applied, QuickSync.baselineAfterApply(next, candidates, applied), 1))
+        // Left unapplied (the default for un-completing): nothing new either.
+        assertEquals(0, QuickSync.expectedNew(candidates, next, 1))
     }
 
     @Test
     fun quickSyncBaselineDropsWhatWasFoundAndKeepsTheGap() {
         val reads = listOf(read("故事", "际会之时", unfinished = listOf("海上狙神"), done = emptyList()))
-        val report = QuickSync.report(candidates, baseline, 3, expectedNew = 1, reads = reads, planned = 3)
+        val report = QuickSync.report(candidates, baseline, 1, expectedNew = 1, reads = reads, planned = 3)
 
         val next = QuickSync.baselineAfterQuickSync(candidates, baseline, report, readEverything = false)
 
-        assertEquals(QuickSyncBaseline(offset = -2, inProgressIds = setOf("2", "4", "6")), next)
+        // Found, so no longer to find: the next sync before applying expects nothing new.
+        assertEquals(QuickSyncBaseline(offset = -1, inProgressIds = setOf("2", "4", "6")), next)
+        assertEquals(0, QuickSync.expectedNew(candidates, next, 1))
+        // Applied: back to the standing gap.
+        val applied = candidates.map { if (it.id == "1") it.copy(isCompleted = true) else it }
+        val afterApply = QuickSync.baselineAfterApply(next, candidates, applied)
+        assertEquals(-2, afterApply.offset)
+        assertEquals(0, QuickSync.expectedNew(applied, afterApply, 1))
+    }
+
+    @Test
+    fun quickSyncBaselineKeepsWhatIsStillMissingToFind() {
+        // 完成数 went up by 2 but the read stopped short (a category not found or cut off): one is still to find.
+        val reads = listOf(read("故事", "际会之时", unfinished = listOf("海上狙神"), done = emptyList()))
+        val report = QuickSync.report(candidates, baseline, 2, expectedNew = 2, reads = reads, planned = 3)
+
+        val next = QuickSync.baselineAfterQuickSync(candidates, baseline, report, readEverything = false)
+
+        val applied = candidates.map { if (it.id == "1") it.copy(isCompleted = true) else it }
+        assertEquals(1, QuickSync.expectedNew(applied, QuickSync.baselineAfterApply(next, candidates, applied), 2))
     }
 
     @Test
@@ -170,9 +211,11 @@ class QuickSyncTest {
         val next = QuickSync.baselineAfterQuickSync(candidates, baseline, report, readEverything = true)
 
         // Once the found one is applied (3 done locally), 完成数 2 means nothing new.
-        assertEquals(-1, next.offset)
+        assertEquals(0, next.offset)
         val applied = candidates.map { if (it.id == "1") it.copy(isCompleted = true) else it }
-        assertEquals(0, QuickSync.expectedNew(applied, next, 2))
+        val afterApply = QuickSync.baselineAfterApply(next, candidates, applied)
+        assertEquals(-1, afterApply.offset)
+        assertEquals(0, QuickSync.expectedNew(applied, afterApply, 2))
     }
 
     private fun read(

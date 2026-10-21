@@ -260,10 +260,12 @@ class ScanCoordinator(
     }
 
     suspend fun apply(diffs: List<ScanDiff>) {
+        val before = repository.scanCandidates()
         repository.applyScannedCompletion(diffs.associate { it.id to it.markCompleted })
         val applied = diffs.map { it.id }.toSet()
         // One diff can update several linked records, so recount instead of adjusting by the diff count.
         val candidates = repository.scanCandidates()
+        quickStore.load()?.let { saveBaseline(QuickSync.baselineAfterApply(it, before, candidates)) }
         val updated = _lastReport.value?.let { report ->
             report.copy(
                 localCompletedCount = ScanReportBuilder.completedAchievements(candidates),

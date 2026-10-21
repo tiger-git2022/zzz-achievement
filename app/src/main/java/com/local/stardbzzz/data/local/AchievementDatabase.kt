@@ -11,7 +11,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AchievementEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 @TypeConverters(AchievementConverters::class)
@@ -21,7 +21,7 @@ abstract class AchievementDatabase : RoomDatabase() {
     companion object {
         fun create(context: Context): AchievementDatabase =
             Room.databaseBuilder(context, AchievementDatabase::class.java, "zzz-achievements.db")
-                .addMigrations(AddGroupKey)
+                .addMigrations(AddGroupKey, AddPercent)
                 .fallbackToDestructiveMigration()
                 .build()
 
@@ -29,6 +29,13 @@ abstract class AchievementDatabase : RoomDatabase() {
         private val AddGroupKey = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE achievements ADD COLUMN groupKey TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        /** stardb's completion rate, for the order of 快速同步; the next refresh fills it in. */
+        private val AddPercent = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE achievements ADD COLUMN percent REAL NOT NULL DEFAULT -1")
             }
         }
     }

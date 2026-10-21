@@ -31,6 +31,14 @@ sealed interface ScanState {
     data class Failed(val message: String) : ScanState
 }
 
+enum class ScanMode {
+    /** Every tab, category and page. */
+    Full,
+
+    /** 快速同步: 完成数 first, then only the categories that can hold new completions (see [QuickSync]). */
+    Quick,
+}
+
 /**
  * Process-wide owner of a scan session: the screen capture (from [ScreenCaptureService]) and
  * gesture input (from [ScanAccessibilityService]) attach here, and the overlay and app UI observe [state].
@@ -63,6 +71,15 @@ class ScanCoordinator(
 
     val debugDirectory: File? get() = appContext.getExternalFilesDir("scan-debug")
 
+    private val quickStore = PrefsQuickSyncStore()
+
+    /** Whether a 快速同步 can run: it needs a finished full scan to compare against. */
+    private val _quickSyncReady = MutableStateFlow(quickStore.load() != null)
+    val quickSyncReady: StateFlow<Boolean> = _quickSyncReady.asStateFlow()
+
+    /** What 重试 on the overlay runs again. */
+    private var lastMode = ScanMode.Quick
+
     @Synchronized
     fun attachInput(gestureInput: GestureInput) {
         input = gestureInput
@@ -94,7 +111,8 @@ class ScanCoordinator(
     }
 
     @Synchronized
-    fun start() {
+    fun start(mode: ScanMode = lastMode) {
+        lastMode = mode
         val screen = capture
         val gestures = input
         if (screen == null || gestures == null) {
@@ -127,11 +145,19 @@ class ScanCoordinator(
                     scaleForOcr(frame).also { shrunk = it.takeIf { copy -> copy !== frame } }
                 }
                 val source = CapturedScreenSource(grab, ocr, queueDirectory, debug)
-                val result = AchievementPageScanner(source, gestures) { update ->
+                val scanner = AchievementPageScanner(source, gestures) { update ->
                     progress = update
                     _state.value = ScanState.Running(update)
-                }.scan()
-                val report = ScanReportBuilder.build(result.rows, candidates, result.gameCompletedCount)
+                }
+                val report = when (mode) {
+                    ScanMode.Full -> {
+                        val result = scanner.scan()
+                        ScanReportBuilder.build(result.rows, candidates, result.gameCompletedCount).also { report ->
+                            QuickSync.baselineAfterFullScan(candidates, report)?.let(::saveBaseline)
+                        }
+                    }
+                    ScanMode.Quick -> quickSync(scanner, candidates)
+                }
                 debug?.writeReport(report, listInfo)
                 _lastReport.value = report
                 _state.value = ScanState.Finished(report)
@@ -158,6 +184,52 @@ class ScanCoordinator(
 
     fun stop() {
         job?.cancel()
+    }
+
+    private suspend fun quickSync(scanner: AchievementPageScanner, candidates: List<ScanCandidate>): ScanReport {
+        val baseline = quickStore.load() ?: error("快速同步要先做一次全盘扫描，作为对比的基准")
+        var expected = 0
+        var planned = 0
+        var count: Int? = null
+        val capture = scanner.quickScan(
+            plan = { read ->
+                val completed = read ?: error("没有读到「完成数」，请确认成就页完整显示后重试")
+                count = completed
+                expected = QuickSync.expectedNew(candidates, baseline, completed)
+                // Nothing new since the last scan (or fewer: then a full scan should look into it).
+                if (expected <= 0) emptyList() else QuickSync.plan(candidates, baseline).also { planned = it.size }
+            },
+            onRead = { reads -> QuickSync.report(candidates, baseline, count, expected, reads, planned).quick!!.found < expected },
+        )
+        val report = QuickSync.report(
+            candidates, baseline, capture.gameCompletedCount, expected, capture.reads, capture.planned,
+            capture.notFound.map { it.category },
+        )
+        saveBaseline(QuickSync.baselineAfterQuickSync(candidates, baseline, report, capture.readEverything))
+        return report
+    }
+
+    private fun saveBaseline(baseline: QuickSyncBaseline) {
+        quickStore.save(baseline)
+        _quickSyncReady.value = true
+    }
+
+    /** The baseline in the scan preferences: the offset and the ids the game last listed as unfinished. */
+    private inner class PrefsQuickSyncStore : QuickSyncStore {
+        override fun load(): QuickSyncBaseline? {
+            if (!prefs.contains(KeyQuickOffset)) return null
+            return QuickSyncBaseline(
+                offset = prefs.getInt(KeyQuickOffset, 0),
+                inProgressIds = prefs.getStringSet(KeyQuickInProgress, emptySet()).orEmpty().toSet(),
+            )
+        }
+
+        override fun save(baseline: QuickSyncBaseline) {
+            prefs.edit()
+                .putInt(KeyQuickOffset, baseline.offset)
+                .putStringSet(KeyQuickInProgress, baseline.inProgressIds)
+                .apply()
+        }
     }
 
     /** Stops scanning, releases the screen capture and hides the overlay. */
@@ -188,10 +260,12 @@ class ScanCoordinator(
     }
 
     suspend fun apply(diffs: List<ScanDiff>) {
+        val before = repository.scanCandidates()
         repository.applyScannedCompletion(diffs.associate { it.id to it.markCompleted })
         val applied = diffs.map { it.id }.toSet()
         // One diff can update several linked records, so recount instead of adjusting by the diff count.
         val candidates = repository.scanCandidates()
+        quickStore.load()?.let { saveBaseline(QuickSync.baselineAfterApply(it, before, candidates)) }
         val updated = _lastReport.value?.let { report ->
             report.copy(
                 localCompletedCount = ScanReportBuilder.completedAchievements(candidates),
@@ -291,6 +365,8 @@ class ScanCoordinator(
 
     private companion object {
         const val KeySaveDebugFrames = "save_debug_frames"
+        const val KeyQuickOffset = "quick_offset"
+        const val KeyQuickInProgress = "quick_in_progress"
         const val OcrMaxWidth = 3200
         const val MaxDebugFrames = 1500
         const val OverlaySettleMillis = 600L

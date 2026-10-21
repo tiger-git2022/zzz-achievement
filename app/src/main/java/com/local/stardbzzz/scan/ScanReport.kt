@@ -18,7 +18,14 @@ data class ScanCandidate(
     val version: String = "",
     /** The stardb group of alternative story branches, blank for most: the game counts the group as one. */
     val group: String = "",
+    /** The in-game tab (故事/城市/战术/探索); anything else, e.g. the arcade games, isn't on the achievement page. */
+    val tab: String = "",
+    /** Share of stardb users who completed it (0..1), negative when unknown. */
+    val percent: Double = -1.0,
 ) {
+    /** Listed on the in-game achievement page, and so counted by its 完成数. */
+    val onAchievementPage: Boolean get() = tab in GameScreenParser.TabNames
+
     val linkKey: LinkKey get() = LinkKey(name, category, version, AchievementMatcher.normalizeText(description))
 
     /** What counts as one achievement: its group of story branches, or the records listing it. */
@@ -43,6 +50,10 @@ data class ScanDiff(
     /** true: completed in game but not locally; false: completed locally but in progress in game. */
     val markCompleted: Boolean,
     val gameStatus: String,
+    /** 快速同步 only: not read as completed, but gone from the game's list of unfinished achievements. */
+    val inferred: Boolean = false,
+    /** Not selected by default: the inference could be wrong (see [QuickSyncSummary]). */
+    val uncertain: Boolean = false,
 )
 
 data class ScanReport(
@@ -62,6 +73,10 @@ data class ScanReport(
     /** Completed locally but not seen by this scan: missed by the scan, misread, or not in the game's list. */
     val localCompletedNotSeen: List<ScanCandidate>,
     val diffs: List<ScanDiff>,
+    /** Local achievements the game listed as unfinished (x/y), the starting point of the next 快速同步. */
+    val inProgressIds: Set<String> = emptySet(),
+    /** Set for a 快速同步, which reads only part of the page. */
+    val quick: QuickSyncSummary? = null,
 ) {
     /** The local completed count if every diff were applied. */
     val localCompletedAfterSync: Int
@@ -361,6 +376,7 @@ object ScanReportBuilder {
             clippedReads = clipped.size,
             localCompletedNotSeen = notSeen,
             diffs = diffs.sortedByDescending { it.markCompleted },
+            inProgressIds = statusById.values.filter { it.second.status is RowStatus.InProgress }.map { it.first.id }.toSet(),
         )
     }
 

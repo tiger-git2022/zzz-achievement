@@ -129,6 +129,7 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
         }
         private val primary = button(service)
         private val secondary = button(service)
+        private val tertiary = button(service)
         private val root = LinearLayout(service).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -140,6 +141,7 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
             addView(status)
             addView(primary)
             addView(secondary)
+            addView(tertiary)
             setOnTouchListener(DragListener())
         }
         private var attached = false
@@ -155,30 +157,40 @@ class ScanAccessibilityService : AccessibilityService(), GestureInput {
                     return
                 }
                 ScanState.Ready -> {
-                    status.text = "成就页点开始"
-                    primary.bind("开始") { coordinator.start() }
-                    secondary.bind("退出") { coordinator.endSession() }
+                    // 快速 compares with the last scan; 全盘 reads everything (and is needed once first).
+                    status.text = "成就页选扫描"
+                    primary.bind("快速") { coordinator.start(ScanMode.Quick) }
+                    secondary.bind("全盘") { coordinator.start(ScanMode.Full) }
+                    tertiary.bind("退出") { coordinator.endSession() }
                 }
                 is ScanState.Running -> {
                     val progress = state.progress
-                    status.text = if (progress.capturing) {
-                        "已截 ${progress.queued} 屏 · 已读 ${progress.rows} 条"
-                    } else {
+                    status.text = when {
+                        progress.quick -> "快速同步 · 已读 ${progress.rows} 条"
+                        progress.capturing -> "已截 ${progress.queued} 屏 · 已读 ${progress.rows} 条"
                         // The game is no longer touched; the rest is OCR of the queued pages.
-                        "截图完成，可切走 · 识别 ${progress.read}/${progress.queued}"
+                        else -> "截图完成，可切走 · 识别 ${progress.read}/${progress.queued}"
                     }
                     primary.bind("停止") { coordinator.stop() }
                     secondary.bind(null) {}
+                    tertiary.bind(null) {}
                 }
                 is ScanState.Finished -> {
-                    status.text = "完成 · ${state.report.diffs.size} 处差异"
+                    val quick = state.report.quick
+                    status.text = when {
+                        quick == null -> "完成 · ${state.report.diffs.size} 处差异"
+                        quick.expectedNew <= 0 -> "没有新成就"
+                        else -> "新完成 ${quick.expectedNew} 个，找到 ${quick.found} 个"
+                    }
                     primary.bind("查看") { openApp() }
                     secondary.bind("关闭") { coordinator.endSession() }
+                    tertiary.bind(null) {}
                 }
                 is ScanState.Failed -> {
                     status.text = state.message
                     primary.bind("重试") { coordinator.start() }
                     secondary.bind("退出") { coordinator.endSession() }
+                    tertiary.bind(null) {}
                 }
             }
             show()

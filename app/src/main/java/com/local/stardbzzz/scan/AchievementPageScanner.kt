@@ -47,11 +47,23 @@ data class ScanProgress(
     val read: Int = 0,
     /** False once every page is captured: the game is no longer touched and only OCR is left. */
     val capturing: Boolean = true,
+    /** A 快速同步, which reads pages as it goes. */
+    val quick: Boolean = false,
 )
 
 data class ScanCapture(
     val rows: List<ObservedRow>,
     val gameCompletedCount: Int?,
+)
+
+data class QuickCapture(
+    val gameCompletedCount: Int?,
+    val reads: List<QuickRead>,
+    /** Planned categories, and the ones the sidebar never showed. */
+    val planned: Int,
+    val notFound: List<QuickTask>,
+    /** Every planned category was found and read to its end, rather than stopping once enough were found. */
+    val readEverything: Boolean,
 )
 
 class NotOnAchievementPageException : IllegalStateException("没有识别到游戏的成就页，请先打开成就页面再开始扫描")
@@ -90,6 +102,7 @@ class AchievementPageScanner(
     private var currentCategory: String? = null
     private var gameCompletedCount: Int? = null
     private var collecting = false
+    private var quick = false
 
     /** The tab bar right after switching tabs; a very different one means the game left the achievement page. */
     private var tabBar: Thumbnail? = null
@@ -118,6 +131,144 @@ class AchievementPageScanner(
         report()
         reader.join()
         ScanCapture(synchronized(lock) { rows.toList() }, gameCompletedCount)
+    }
+
+    /**
+     * 快速同步: reads 完成数, asks [plan] which categories to read (in that order), and reads them one by one,
+     * going to each through its tab and the sidebar. A head-only category is read until the first row with a date:
+     * the game lists unfinished achievements first. After each category [onRead] gets everything read so far and
+     * says whether to go on. Pages are read as they come (the next step depends on them), not queued.
+     */
+    suspend fun quickScan(
+        plan: (gameCompletedCount: Int?) -> List<QuickTask>,
+        onRead: (List<QuickRead>) -> Boolean,
+    ): QuickCapture {
+        quick = true
+        report()
+        val tabs = findAllTabs(readWholePage())
+        repeat(PageReadAttempts) {
+            if (gameCompletedCount != null) return@repeat
+            gameCompletedCount = GameScreenParser.parse(shoot().frame.read(CounterRegion)).completedCount
+        }
+        val tasks = plan(gameCompletedCount)
+        val reads = mutableListOf<QuickRead>()
+        val notFound = mutableListOf<QuickTask>()
+        // Consecutive tasks of one tab are found from one visit; the plan keeps each pass's tabs together.
+        val visits = mutableListOf<MutableList<QuickTask>>()
+        tasks.forEach { task ->
+            if (visits.lastOrNull()?.first()?.tab == task.tab) visits.last() += task else visits += mutableListOf(task)
+        }
+        for (visit in visits) {
+            val tab = visit.first().tab
+            currentTab = tab
+            currentCategory = null
+            report()
+            val tabPoint = tabs[tab]
+            if (tabPoint == null) {
+                notFound += visit
+                continue
+            }
+            input.tap(tabPoint)
+            delay(timings.afterTapMillis)
+            tabBar = shoot().tabBar
+            rewindSidebar()
+            // Strictly in the plan's order: a sidebar swipe costs far less than reading a category that could
+            // have been skipped. A category the sidebar doesn't show is looked for down to its end, once more
+            // from its top, then given up on.
+            val remaining = visit.toMutableList()
+            var previousLabels: List<String>? = null
+            var ends = 0
+            var scrolls = 0
+            fun giveUp() {
+                notFound += remaining.removeAt(0)
+                previousLabels = null
+                ends = 0
+                scrolls = 0
+            }
+            while (remaining.isNotEmpty()) {
+                val task = remaining.first()
+                val labels = readSidebar()
+                val label = labels.firstOrNull { isSameLabel(it.text, task.category) }
+                if (label != null) {
+                    remaining.removeAt(0)
+                    previousLabels = null
+                    ends = 0
+                    scrolls = 0
+                    reads += readCategory(task, label)
+                    if (!onRead(reads.toList())) {
+                        return QuickCapture(gameCompletedCount, reads, tasks.size, notFound, readEverything = false)
+                    }
+                    continue
+                }
+                val texts = labels.map { it.text }
+                if (previousLabels != null && sameContent(previousLabels!!, texts)) {
+                    // The swipe didn't move it: the sidebar's end.
+                    if (++ends > 1) {
+                        giveUp()
+                    } else {
+                        rewindSidebar()
+                        previousLabels = null
+                    }
+                    continue
+                }
+                if (++scrolls > MaxSidebarScrolls) {
+                    giveUp()
+                    continue
+                }
+                previousLabels = texts
+                input.swipe(SidebarSwipeFrom, SidebarSwipeTo, timings.swipeMillis, timings.holdMillis)
+                delay(timings.afterSwipeMillis)
+            }
+        }
+        // A category not found, or read only part way (the page cap), may still hold what's missing.
+        val readEverything = notFound.isEmpty() && reads.all { it.complete }
+        return QuickCapture(gameCompletedCount, reads, tasks.size, notFound, readEverything)
+    }
+
+    /** Opens a category and reads its list from the top, page by page, to its end or (head only) its first date. */
+    private suspend fun readCategory(task: QuickTask, label: SidebarLabel): QuickRead {
+        currentCategory = label.text
+        report()
+        input.tap(label.center)
+        var page = rewindList()
+        collecting = true
+        report()
+        val rows = mutableListOf<ObservedRow>()
+        var complete = false
+        for (step in 0 until MaxPagesPerCategory) {
+            synchronized(lock) { queued++ }
+            val parsed = GameScreenParser.parse(page.frame.keep(RowsRegion).read())
+            val pageRows = parsed.rows.map { ObservedRow(task.tab, label.text, it.name, it.description, it.status) }
+            rows += pageRows
+            synchronized(lock) {
+                pageRows.forEach { seenNames += AchievementMatcher.normalizeText(it.name) }
+                read++
+            }
+            report()
+            if (task.headOnly && parsed.rows.any { (it.status as? RowStatus.Completed)?.date != null }) {
+                complete = true
+                break
+            }
+            val next = nextPage(page)
+            if (next == null) {
+                complete = true
+                break
+            }
+            page = next
+        }
+        collecting = false
+        report()
+        return QuickRead(task, label.text, rows, complete)
+    }
+
+    /** Swipes one page on; null at the list's end. A swipe the game dropped is retried once. */
+    private suspend fun nextPage(page: Shot): Shot? {
+        repeat(StableReads) {
+            input.swipe(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, timings.holdMillis)
+            val next = settle()
+            if (!unchangedList(page, next)) return next
+        }
+        return null
     }
 
     private suspend fun walk(queue: SendChannel<QueuedPage>) {
@@ -195,22 +346,11 @@ class AchievementPageScanner(
     }
 
     private suspend fun scanCategory(tab: String, category: String, queue: SendChannel<QueuedPage>) {
-        // The game may keep an earlier scroll position, so fling back up until the list stops moving.
-        // Requiring it to stay put twice keeps one fling the game dropped from passing for the top.
-        var page = settle()
-        var unchanged = 0
-        for (step in 0 until MaxPagesPerCategory) {
-            input.swipe(ListSwipeTo, ListSwipeFrom, timings.flingMillis)
-            val next = settle()
-            unchanged = if (unchangedList(page, next)) unchanged + 1 else 0
-            page = next
-            if (unchanged >= StableReads) break
-        }
-
+        var page = rewindList()
         collecting = true
         report()
         enqueue(page, tab, category, queue)
-        unchanged = 0
+        var unchanged = 0
         for (step in 1 until MaxPagesPerCategory) {
             input.swipe(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, timings.holdMillis)
             val next = settle()
@@ -226,6 +366,23 @@ class AchievementPageScanner(
         }
         collecting = false
         report()
+    }
+
+    /**
+     * The game may keep an earlier scroll position, so fling back up until the list stops moving. Requiring it to
+     * stay put twice keeps one fling the game dropped from passing for the top.
+     */
+    private suspend fun rewindList(): Shot {
+        var page = settle()
+        var unchanged = 0
+        for (step in 0 until MaxPagesPerCategory) {
+            input.swipe(ListSwipeTo, ListSwipeFrom, timings.flingMillis)
+            val next = settle()
+            unchanged = if (unchangedList(page, next)) unchanged + 1 else 0
+            page = next
+            if (unchanged >= StableReads) break
+        }
+        return page
     }
 
     private suspend fun enqueue(shot: Shot, tab: String, category: String, queue: SendChannel<QueuedPage>) {
@@ -296,7 +453,7 @@ class AchievementPageScanner(
 
     private fun report() {
         val progress = synchronized(lock) {
-            ScanProgress(currentTab, currentCategory, pages, seenNames.size, collecting, queued, read, capturing)
+            ScanProgress(currentTab, currentCategory, pages, seenNames.size, collecting, queued, read, capturing, quick)
         }
         onProgress(progress)
     }

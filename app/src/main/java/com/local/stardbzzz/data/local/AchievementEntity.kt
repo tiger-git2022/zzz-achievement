@@ -23,6 +23,9 @@ data class AchievementEntity(
     /** The stardb group of alternative story-branch achievements, blank for most; see AchievementDto.group. */
     @ColumnInfo(defaultValue = "")
     val groupKey: String = "",
+    /** Share of stardb users who completed it (0..1), -1 until a refresh fills it in. */
+    @ColumnInfo(defaultValue = "-1")
+    val percent: Double = -1.0,
 )
 
 /** Counted as one achievement: the members of a stardb group of story branches are one. */

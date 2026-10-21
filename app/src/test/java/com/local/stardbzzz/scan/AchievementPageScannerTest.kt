@@ -146,6 +146,113 @@ class AchievementPageScannerTest {
     }
 
     @Test
+    fun quickScanReadsOnlyTheUnfinishedTopOfACategory() = runBlocking {
+        // 12 rows, the first two unfinished: the first page already shows a date, so nothing further is read.
+        val rows = rows("故事", 12)
+        val game = FakeGame(
+            GameScreenParser.TabNames.associateWith { tab -> listOf("${tab}分类" to if (tab == "故事") rows else rows(tab, 3)) },
+            unfinished = rows.take(2).toSet(),
+        )
+
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).quickScan(
+            plan = { listOf(QuickTask("故事", "故事分类", headOnly = true, priority = 1.0)) },
+            onRead = { true },
+        )
+
+        val read = capture.reads.single()
+        assertTrue(read.complete)
+        assertEquals(1, game.keptReads.size)
+        assertEquals(rows.take(5), read.rows.map { it.name })
+        assertEquals(2, read.rows.count { it.status is RowStatus.InProgress })
+        assertTrue(capture.readEverything)
+    }
+
+    @Test
+    fun quickScanReadsAWholeListWhenAsked() = runBlocking {
+        val rows = rows("城市", 12)
+        val game = FakeGame(GameScreenParser.TabNames.associateWith { tab -> listOf("${tab}分类" to if (tab == "城市") rows else rows(tab, 3)) })
+
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).quickScan(
+            plan = { listOf(QuickTask("城市", "城市分类", headOnly = false, priority = 1.0)) },
+            onRead = { true },
+        )
+
+        val read = capture.reads.single()
+        assertTrue(read.complete)
+        assertEquals(rows.toSet(), read.rows.map { it.name }.toSet())
+    }
+
+    @Test
+    fun quickScanGoesToThePlannedCategoriesInOrder() = runBlocking {
+        // Nine categories per tab, six visible: 分类8 needs the sidebar scrolled, 分类2 is back at its top.
+        val game = FakeGame(
+            GameScreenParser.TabNames.associateWith { tab -> (1..9).map { c -> "${tab}分类$c" to rows("$tab$c", 4) } },
+            startAtBottom = true,
+        )
+        val plan = listOf(
+            QuickTask("战术", "战术分类8", headOnly = true, priority = 3.0),
+            QuickTask("战术", "战术分类2", headOnly = true, priority = 2.0),
+            QuickTask("故事", "故事分类5", headOnly = true, priority = 1.0),
+        )
+        var completedCount: Int? = null
+
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).quickScan(
+            plan = { count -> completedCount = count; plan },
+            onRead = { true },
+        )
+
+        assertEquals(42, completedCount)
+        assertEquals(listOf("战术/战术分类8", "战术/战术分类2", "故事/故事分类5"), game.opened)
+        assertEquals(plan, capture.reads.map { it.task })
+        assertTrue(capture.notFound.isEmpty())
+    }
+
+    @Test
+    fun quickScanStopsOnceToldTo() = runBlocking {
+        val game = FakeGame(GameScreenParser.TabNames.associateWith { tab -> (1..3).map { c -> "${tab}分类$c" to rows("$tab$c", 4) } })
+        val plan = GameScreenParser.TabNames.map { QuickTask(it, "${it}分类1", headOnly = true, priority = 1.0) }
+
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).quickScan(
+            plan = { plan },
+            onRead = { reads -> reads.size < 2 },
+        )
+
+        assertEquals(2, capture.reads.size)
+        assertEquals(2, game.categoryTaps)
+        assertFalse(capture.readEverything)
+    }
+
+    @Test
+    fun quickScanReportsACategoryTheSidebarNeverShows() = runBlocking {
+        val game = FakeGame(GameScreenParser.TabNames.associateWith { tab -> (1..8).map { c -> "${tab}分类$c" to rows("$tab$c", 2) } })
+        val missing = QuickTask("城市", "罗斯凯利法", headOnly = true, priority = 2.0)
+        val present = QuickTask("城市", "城市分类7", headOnly = true, priority = 1.0)
+
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).quickScan(
+            plan = { listOf(missing, present) },
+            onRead = { true },
+        )
+
+        assertEquals(listOf(present), capture.reads.map { it.task })
+        assertEquals(listOf(missing), capture.notFound)
+        // What's missing may be in the category not found: not everything was read.
+        assertFalse(capture.readEverything)
+        // It looked through the sidebar a bounded number of times.
+        assertTrue("swipes: ${game.swipes}", game.swipes < 30)
+    }
+
+    @Test
+    fun quickScanWithNothingPlannedOnlyReadsTheCounter() = runBlocking {
+        val game = FakeGame(GameScreenParser.TabNames.associateWith { listOf("${it}分类" to rows(it, 3)) })
+
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).quickScan(plan = { emptyList() }, onRead = { true })
+
+        assertEquals(42, capture.gameCompletedCount)
+        assertEquals(0, game.categoryTaps)
+        assertEquals(0, game.swipes)
+    }
+
+    @Test
     fun sameContentToleratesMisreadsButNotScrolling() {
         val page = listOf("叩响命运之门", "「英雄」的名字", "从零开始的绳匠生活", "欢迎新员工!", "治安官的答案")
         assertTrue(AchievementPageScanner.sameContent(page, listOf("D响命运之门", "『英雄｣的名字", "从雪开始的绳匠生活", "欢迎新员工!", "治安官的答案")))
@@ -218,11 +325,16 @@ class AchievementPageScannerTest {
         private val jitterSidebar: Boolean = false,
         /** The game switches to another screen after this many swipes. */
         private val leaveAfterSwipes: Int? = null,
+        /** Rows shown unfinished (01/03) instead of with a date. */
+        private val unfinished: Set<String> = emptySet(),
     ) : ScreenSource, GestureInput {
         var swipes = 0
             private set
         var categoryTaps = 0
             private set
+
+        /** tab/category of each category tap, in order. */
+        val opened = mutableListOf<String>()
         var wholeReads = 0
             private set
         val keptReads = mutableListOf<List<OcrBox>>()
@@ -302,7 +414,7 @@ class AchievementPageScannerTest {
                 val y = 0.30f + index * 0.136f
                 boxes += OcrBox(if (garble) jitter(name) else name, 0.29f, y - 0.032f, 0.40f, y - 0.005f)
                 boxes += OcrBox("描述$name", 0.29f, y + 0.003f, 0.45f, y + 0.028f)
-                boxes += OcrBox("2026年1月1日", 0.81f, y - 0.016f, 0.90f, y + 0.016f)
+                boxes += OcrBox(if (name in unfinished) "01/03" else "2026年1月1日", 0.81f, y - 0.016f, 0.90f, y + 0.016f)
             }
             return boxes
         }
@@ -329,6 +441,7 @@ class AchievementPageScannerTest {
             } else if (point.x < 0.25f) {
                 categoryTaps++
                 category = sidebarOffset + ((point.y - 0.35f + 0.04f) / 0.0845f).toInt()
+                opened += "$tab/${categories.getOrNull(category)?.first}"
             }
         }
 

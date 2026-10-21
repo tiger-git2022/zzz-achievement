@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.local.stardbzzz.data.repository.AchievementListInfo
 import com.local.stardbzzz.data.repository.AuthenticationExpiredException
+import com.local.stardbzzz.scan.QuickSyncSummary
 import com.local.stardbzzz.scan.ScanCoordinator
 import com.local.stardbzzz.scan.ScanDiff
 import com.local.stardbzzz.scan.ScanReport
@@ -72,6 +73,7 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
     val accessibilityOn by coordinator.accessibilityConnected.collectAsStateWithLifecycle()
     val report by coordinator.lastReport.collectAsStateWithLifecycle()
     val saveDebug by coordinator.saveDebugFrames.collectAsStateWithLifecycle()
+    val quickReady by coordinator.quickSyncReady.collectAsStateWithLifecycle()
     var applying by remember { mutableStateOf(false) }
     var listInfo by remember { mutableStateOf<AchievementListInfo?>(null) }
     var refreshingList by remember { mutableStateOf(false) }
@@ -82,7 +84,7 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
         val data = result.data
         if (result.resultCode == Activity.RESULT_OK && data != null) {
             ScreenCaptureService.start(context, result.resultCode, data)
-            Toast.makeText(context, "已就绪：切换到游戏的成就页，点击悬浮窗的「开始」", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "已就绪：切换到游戏的成就页，点击悬浮窗的「快速」或「全盘」", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -105,7 +107,10 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
             item {
                 Text(
                     text = "自动切换游戏成就页的各个分类并滑动列表，识别每条成就的完成状态，与本地数据对比后由你确认同步。" +
-                        "截图期间不要触碰屏幕；悬浮窗显示「截图完成」后就可以切到其他 App，识别会在后台继续。",
+                        "截图期间不要触碰屏幕；悬浮窗显示「截图完成」后就可以切到其他 App，识别会在后台继续。\n\n" +
+                        "悬浮窗有两种扫描：「全盘」把每个分类从头翻到底；「快速」只用于日常同步，先比对「完成数」，" +
+                        "没变就直接结束，变了再只看各分类顶部的未完成部分（游戏把未完成的排在最前面），按全服完成率从高到低找，凑够数就停。" +
+                        "快速同步以上一次全盘扫描为基准，第一次请先做全盘扫描。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -178,7 +183,16 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
                 Column {
                     ListItem(
                         headlineContent = { Text("2. 开始扫描") },
-                        supportingContent = { Text(state.description()) },
+                        supportingContent = {
+                            Column {
+                                Text(state.description())
+                                Text(
+                                    if (quickReady) "快速同步：已有全盘扫描的基准，可以直接用「快速」。"
+                                    else "快速同步：还没有基准，请先做一次「全盘」扫描。",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
                     )
                     Row(
                         modifier = Modifier.padding(horizontal = 16.dp),
@@ -248,7 +262,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.reportItems(
     item {
         Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("扫描结果", style = MaterialTheme.typography.titleMedium)
+                Text(if (report.quick != null) "快速同步结果" else "扫描结果", style = MaterialTheme.typography.titleMedium)
+                report.quick?.let { quick -> QuickSummaryText(report.gameCompletedCount, quick) }
                 Text("游戏完成数 ${report.gameCompletedCount ?: "未识别"} · 本次看到已完成 ${report.gameCompletedSeen} 条")
                 Text(
                     buildString {
@@ -263,7 +278,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.reportItems(
                     "识别 ${report.observedCount} 条 · 匹配 ${report.matchedCount} 条 · 未匹配 ${report.unmatched.size} 条" +
                         if (report.clippedReads > 0) " · 忽略半截名字 ${report.clippedReads} 条" else "",
                 )
-                if (report.gameCompletedCount != null && report.localCompletedAfterSync != report.gameCompletedCount) {
+                // 快速同步 compares against its baseline instead, which allows for the counts' standing gap.
+                if (report.quick == null && report.gameCompletedCount != null && report.localCompletedAfterSync != report.gameCompletedCount) {
                     Text(
                         "同步后的本地完成数与游戏不一致，请先查看下方「未匹配」和「本地已完成但本次没看到」再同步。",
                         color = MaterialTheme.colorScheme.error,
@@ -305,6 +321,31 @@ private fun androidx.compose.foundation.lazy.LazyListScope.reportItems(
 }
 
 @Composable
+private fun QuickSummaryText(gameCompletedCount: Int?, quick: QuickSyncSummary) {
+    when {
+        quick.expectedNew == 0 -> Text("游戏完成数 ${gameCompletedCount ?: "未识别"}，和上次扫描后一样，没有新完成的成就。")
+        quick.expectedNew < 0 -> Text(
+            "游戏完成数 ${gameCompletedCount ?: "未识别"}，比按本地记录算出来的少 ${-quick.expectedNew} 个。" +
+                "可能本地多勾了成就，建议做一次全盘扫描。",
+            color = MaterialTheme.colorScheme.error,
+        )
+        else -> {
+            Text("游戏完成数 ${gameCompletedCount ?: "未识别"}，比上次扫描后多 ${quick.expectedNew} 个；找到 ${quick.found} 个。")
+            Text("读了 ${quick.categoriesRead}/${quick.categoriesPlanned} 个分类" + if (quick.found >= quick.expectedNew) "，找够了就停下。" else "。")
+            if (!quick.consistent) {
+                Text(
+                    "找到的数量和完成数对不上，推断出来的项默认不勾选，请逐个确认；也可以做一次全盘扫描。",
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (quick.notFound.isNotEmpty()) {
+                Text("侧栏里没找到的分类：${quick.notFound.joinToString("、")}", color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+@Composable
 private fun ExpandableList(title: String, subtitle: String, lines: List<String>) {
     var expanded by remember { mutableStateOf(false) }
     Column {
@@ -323,8 +364,11 @@ private fun ExpandableList(title: String, subtitle: String, lines: List<String>)
 
 @Composable
 private fun DiffList(diffs: List<ScanDiff>, applying: Boolean, onApply: (List<ScanDiff>) -> Unit) {
-    // Marking completions is selected by default; un-completing (stardb ahead of the game) is opt-in.
-    val selected = remember(diffs) { mutableStateMapOf<String, Boolean>().apply { diffs.forEach { put(it.id, it.markCompleted) } } }
+    // Marking completions is selected by default; un-completing (stardb ahead of the game) and doubtful inferences
+    // are opt-in.
+    val selected = remember(diffs) {
+        mutableStateMapOf<String, Boolean>().apply { diffs.forEach { put(it.id, it.markCompleted && !it.uncertain) } }
+    }
     Column {
         diffs.forEach { diff ->
             Row(
@@ -338,7 +382,8 @@ private fun DiffList(diffs: List<ScanDiff>, applying: Boolean, onApply: (List<Sc
                 Column(modifier = Modifier.weight(1f)) {
                     Text(diff.name, style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        text = "${diff.category} · 游戏：${diff.gameStatus} → ${if (diff.markCompleted) "标记完成" else "取消完成"}",
+                        text = "${diff.category} · 游戏：${diff.gameStatus} → ${if (diff.markCompleted) "标记完成" else "取消完成"}" +
+                            if (diff.uncertain) "（推断，请确认）" else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -370,10 +415,14 @@ private fun AchievementListInfo.describe(): String {
 }
 
 private fun ScanState.description(): String = when (this) {
-    ScanState.Idle -> "授权屏幕录制后，切换到游戏的成就页，点击悬浮窗的「开始」。"
-    ScanState.Ready -> "已就绪：切换到游戏的成就页，点击悬浮窗的「开始」。"
+    ScanState.Idle -> "授权屏幕录制后，切换到游戏的成就页，点击悬浮窗的「快速」或「全盘」。"
+    ScanState.Ready -> "已就绪：切换到游戏的成就页，点击悬浮窗的「快速」或「全盘」。"
     is ScanState.Running -> buildString {
-        if (progress.capturing) {
+        if (progress.quick) {
+            append("快速同步中")
+            progress.tab?.let { append(" · ").append(it) }
+            progress.category?.let { append(" / ").append(it) }
+        } else if (progress.capturing) {
             append("扫描中")
             progress.tab?.let { append(" · ").append(it) }
             progress.category?.let { append(" / ").append(it) }

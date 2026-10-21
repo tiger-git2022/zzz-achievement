@@ -102,4 +102,6 @@ data class AchievementDto(
      * blank for a group of one. The game counts a group as one achievement, done once any member is.
      */
     val group: String = "",
+    /** Share of stardb users who completed it (0..1); null when stardb didn't say. Orders 快速同步's categories. */
+    val percent: Double? = null,
 )

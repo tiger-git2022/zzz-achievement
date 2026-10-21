@@ -26,6 +26,8 @@ class SvelteKitDataParserTest {
         assertEquals(achievements.getValue(1005030).id, achievements.getValue(1005030).group)
         assertEquals(achievements.getValue(1005030).id, achievements.getValue(1005031).group)
         assertEquals("", achievements.getValue(1005001).group)
+        // stardb's completion rate, which orders 快速同步's categories.
+        assertEquals(0.8776, achievements.getValue(1005001).percent!!, 0.0001)
         // Series 1005 (法厄同纪事) is on the 故事 tab.
         assertEquals(setOf("故事"), achievements.values.map { it.primaryCategory }.toSet())
     }

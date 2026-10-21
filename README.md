@@ -36,8 +36,18 @@
 设置 → 游戏成就扫描：自动遍历游戏成就页，识别每条成就的完成状态，与本地数据对比后确认同步到 stardb。
 
 1. 开启无障碍服务「绝区零成就 · 自动扫描」（用于自动点击分类和滑动列表，并显示悬浮窗）。侧载安装的 App 在 Android 13+ 上需先到 应用信息 → ⋮ → 允许受限制的设置。
-2. 点「授权屏幕录制」，然后切到游戏的成就页，点悬浮窗的「开始」。扫描期间不要触碰屏幕。
+2. 点「授权屏幕录制」，然后切到游戏的成就页，点悬浮窗的「全盘」或「快速」。扫描期间不要触碰屏幕。
 3. 完成后点悬浮窗的「查看」，在 App 里勾选要同步的差异。默认只勾选「游戏已完成、本地未完成」的项目。
+
+**快速同步**（悬浮窗「快速」，日常用）：以上一次扫描为基准，第一次要先做一次「全盘」。
+
+- 先读左上角的「完成数」，和基准一样就直接结束，几秒钟。
+- 多了 N 个，就只去读可能有新成就的分类：本地已全部完成的分类跳过，其余按分类里未完成成就的 stardb 全服完成率之和从高到低排，凑够 N 个就停。
+- 游戏把每个分类的未完成成就排在最前面，所以只读到第一条带日期的为止。上次扫描看到还没完成、这次已经不在未完成区里的，就算新完成。
+- 游戏会藏起一部分没完成的成就（隐藏成就、没有的代理人的信赖成就等，第四轮全盘扫描时约 140 个），它们完成后才出现在已完成区。前面找不够 N 个时，再把含有这类成就的分类整页读完。
+- 找到的数量和完成数对不上时，推断出来的项默认不勾选，并提示做一次全盘扫描。
+
+实现见 `scan/QuickSync.kt`（基准、分类顺序、推断）和 `AchievementPageScanner.quickScan`（按顺序找分类、只读未完成区）。
 
 实现：`scan/` 目录。MediaProjection 截屏 → PaddleOCR PP-OCRv6 small 中文 OCR（ONNX Runtime 本地运行，模型在 `app/src/main/assets/ppocr/`，打包在 APK 内）→ `GameScreenParser` 按版面解析出页签、侧栏分类和成就行（右侧显示日期 = 已完成，显示 x/y = 未完成）→ `AchievementMatcher` 去掉标点后按编辑距离匹配本地成就名。开启「保存调试数据」后，每一屏的截图和识别文字会保存在 `Android/data/com.local.stardbzzz/files/scan-debug/`，TSV 格式与 `app/src/test/resources/ocr/` 下的测试数据相同；同时保存本地成就列表、每帧所属分类和扫描报告，可以在电脑上用当前代码离线重跑，或对比其他 OCR 引擎，见 `tools/ocr-compare/README.md`。
 
@@ -89,8 +99,18 @@ Personal native Android app for tracking Zenless Zone Zero achievements, synced 
 Settings → 游戏成就扫描 walks through the in-game achievement page, reads each achievement's state, compares it with the local data and syncs the differences to stardb after you confirm.
 
 1. Turn on the accessibility service 「绝区零成就 · 自动扫描」 (used to tap tabs, scroll the list and show the floating window). On Android 13+, sideloaded apps first need App info → ⋮ → Allow restricted settings.
-2. Tap 「授权屏幕录制」 to allow screen capture, switch to the game's achievement page and tap 「开始」 on the floating window. Don't touch the screen while it scans.
+2. Tap 「授权屏幕录制」 to allow screen capture, switch to the game's achievement page and tap 「全盘」 (full) or 「快速」 (quick) on the floating window. Don't touch the screen while it scans.
 3. When it finishes, tap 「查看」 and pick the differences to sync. By default only "completed in game, not completed locally" items are selected.
+
+**Quick sync** (「快速」, for day-to-day use) compares against the last scan, so the first scan has to be a full one.
+
+- It reads the 完成数 (completed count) first and stops right there if nothing changed.
+- If N more are completed, it only reads categories that can hold them: categories with nothing left to complete locally are skipped, the rest go by the summed stardb completion rate of their unfinished achievements, and it stops once N are found.
+- The game lists each category's unfinished achievements first, so it reads only up to the first row with a date. An achievement the last scan saw unfinished that is no longer there counts as newly completed.
+- The game hides some unfinished achievements (hidden ones, trust achievements of agents you don't have: about 140 in the fourth full scan); they only appear among the completed ones. If the first pass finds fewer than N, it reads the whole list of categories that have such achievements.
+- When the completions found don't add up to 完成数, inferred items are left unselected and it suggests a full scan.
+
+See `scan/QuickSync.kt` (baseline, category order, inference) and `AchievementPageScanner.quickScan` (finding categories, reading only the unfinished part).
 
 How it works (`scan/`): MediaProjection screenshots → PaddleOCR PP-OCRv6 small Chinese OCR (on-device with ONNX Runtime; models in `app/src/main/assets/ppocr/`, bundled in the APK) → `GameScreenParser` reads tabs, sidebar categories and achievement rows (a date on the right = completed, `x/y` = in progress) → `AchievementMatcher` matches names to local achievements by edit distance. With 「保存调试数据」 on, each frame and its OCR text are saved under `Android/data/com.local.stardbzzz/files/scan-debug/`, in the same TSV format as `app/src/test/resources/ocr/`, together with the local achievement list, the tab/category of each frame and the report, so a session can be replayed offline with the current code or another OCR engine (see `tools/ocr-compare/README.md`).
 

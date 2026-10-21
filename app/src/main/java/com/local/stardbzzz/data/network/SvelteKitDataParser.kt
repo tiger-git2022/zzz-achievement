@@ -154,6 +154,7 @@ private fun Map<*, *>.toAchievements(): List<AchievementDto> {
                     completed = completeId != null && sameId(completeId, id),
                     completedViaGroup = viaGroup,
                     group = groupKey,
+                    percent = (achievement["percent"] as? Number)?.toDouble(),
                 )
             }
         }
@@ -191,6 +192,7 @@ private fun JSONObject.toAchievements(): List<AchievementDto> {
                     completed = completeId != null && sameId(completeId, id),
                     completedViaGroup = viaGroup,
                     group = groupKey,
+                    percent = achievement.optDouble("percent").takeUnless { it.isNaN() },
                 )
             }
         }

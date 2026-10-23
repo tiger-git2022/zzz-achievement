@@ -37,6 +37,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import com.local.stardbzzz.ui.glass.GlassScaffold
+import com.local.stardbzzz.ui.glass.glassContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -88,9 +90,11 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
+    GlassScaffold(
+        topBar = { barModifier, barColors ->
             TopAppBar(
+                modifier = barModifier,
+                colors = barColors,
                 title = { Text("游戏成就扫描") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -99,10 +103,14 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
                 },
             )
         },
-    ) { padding ->
+    ) { padding, page ->
+        // The list scrolls under the glass top bar.
         LazyColumn(
-            modifier = Modifier.padding(padding).fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp),
+            modifier = Modifier.fillMaxSize().glassContent(page),
+            contentPadding = PaddingValues(
+                top = padding.calculateTopPadding(),
+                bottom = 24.dp + padding.calculateBottomPadding(),
+            ),
         ) {
             item {
                 Text(

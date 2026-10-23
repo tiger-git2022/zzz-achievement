@@ -60,10 +60,12 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DrawerDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,6 +80,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarColors
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.ui.res.painterResource
@@ -104,7 +107,9 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -129,6 +134,18 @@ import com.local.stardbzzz.data.repository.AchievementUiModel
 import com.local.stardbzzz.data.update.AppUpdater
 import com.local.stardbzzz.scan.ScanCoordinator
 import com.local.stardbzzz.R
+import com.local.stardbzzz.ui.glass.GlassAlertDialog
+import com.local.stardbzzz.ui.glass.GlassDropdownMenu
+import com.local.stardbzzz.ui.glass.GlassEdge
+import com.local.stardbzzz.ui.glass.GlassScaffold
+import com.local.stardbzzz.ui.glass.GlassStyle
+import com.local.stardbzzz.ui.glass.LocalGlassEnabled
+import com.local.stardbzzz.ui.glass.edgeGlass
+import com.local.stardbzzz.ui.glass.glass
+import com.local.stardbzzz.ui.glass.glassContent
+import com.local.stardbzzz.ui.glass.glassSelectedColor
+import com.local.stardbzzz.ui.glass.rememberGlassBackdrop
+import com.kyant.backdrop.backdrops.LayerBackdrop
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -188,12 +205,15 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoo
         return
     }
 
+    // The page with its top bar, for the glass of the category drawer.
+    val screenBackdrop = rememberGlassBackdrop()
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = status.hasCredentials,
         drawerContent = {
             CategoryDrawerContent(
                 state = state,
+                backdrop = screenBackdrop,
                 onCategorySelected = { primary, category ->
                     viewModel.updateCategorySelection(primary, category)
                     scope.launch { drawerState.close() }
@@ -201,13 +221,16 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoo
             )
         },
     ) {
-    Scaffold(
+    Box(Modifier.fillMaxSize().glassContent(screenBackdrop)) {
+    GlassScaffold(
         modifier = Modifier.openDrawerOnHorizontalSwipe(
             enabled = status.hasCredentials && drawerState.isClosed,
             onOpen = { scope.launch { drawerState.open() } },
         ),
-        topBar = {
+        topBar = { barModifier, barColors ->
             AchievementTopBar(
+                modifier = barModifier,
+                colors = barColors,
                 title = state.selectedCategory().ifBlank { state.selectedPrimaryCategory().ifBlank { "绝区零成就" } },
                 isRefreshing = status.isRefreshing,
                 onOpenCategories = { scope.launch { drawerState.open() } },
@@ -221,9 +244,11 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoo
             )
         },
         contentWindowInsets = WindowInsets(0),
-    ) { padding ->
-        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+    ) { padding, page ->
+        Box(modifier = Modifier.fillMaxSize()) {
             if (!status.hasCredentials) {
+                // Not recorded for the glass: the login page holds a WebView.
+                Box(Modifier.padding(padding).fillMaxSize()) {
                 LoginScreen(
                     isLoading = status.isRefreshing,
                     error = status.error,
@@ -231,8 +256,11 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoo
                     onCookieLogin = viewModel::loginWithSessionCookie,
                     onDismissError = viewModel::clearError,
                 )
+                }
             } else {
                 AchievementHome(
+                    contentPadding = padding,
+                    page = page,
                     state = state,
                     isRefreshing = status.isRefreshing,
                     error = status.error,
@@ -266,12 +294,15 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoo
         }
     }
     }
+    }
 
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AchievementTopBar(
+    modifier: Modifier,
+    colors: TopAppBarColors,
     title: String,
     isRefreshing: Boolean,
     onOpenCategories: () -> Unit,
@@ -280,6 +311,7 @@ private fun AchievementTopBar(
     onLogout: () -> Unit,
 ) {
     TopAppBar(
+        modifier = modifier,
         title = title@{
             Text(
                 text = title,
@@ -321,7 +353,8 @@ private fun AchievementTopBar(
                 Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "退出登录")
             }
         },
-        colors = TopAppBarDefaults.topAppBarColors(
+        // Plain surface without glass, as before; transparent over the glass.
+        colors = if (LocalGlassEnabled.current) colors else TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.surface,
         ),
     )
@@ -330,11 +363,20 @@ private fun AchievementTopBar(
 @Composable
 private fun CategoryDrawerContent(
     state: AchievementScreenState,
+    backdrop: LayerBackdrop?,
     onCategorySelected: (String, String) -> Unit,
 ) {
     val selectedPrimary = state.selectedPrimaryCategory()
     val selectedCategory = state.selectedCategory()
-    ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.67f)) {
+    // On glass the items are clear and the selected one is a light in the glass.
+    val glass = backdrop != null
+    val selectedColor = if (glass) glassSelectedColor() else MaterialTheme.colorScheme.secondaryContainer
+    val itemColor = if (glass) Color.Transparent else MaterialTheme.colorScheme.surface
+    ModalDrawerSheet(
+        modifier = Modifier.fillMaxWidth(0.67f).edgeGlass(backdrop, GlassEdge.End, GlassStyle.Sheet),
+        drawerContainerColor = if (glass) Color.Transparent else DrawerDefaults.modalContainerColor,
+        drawerTonalElevation = if (glass) 0.dp else DrawerDefaults.ModalDrawerElevation,
+    ) {
         Text(
             text = "分类",
             style = MaterialTheme.typography.titleMedium,
@@ -349,7 +391,7 @@ private fun CategoryDrawerContent(
             item(key = "pinned-category") {
                 val selected = selectedPrimary == PinnedCategory
                 Surface(
-                    color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+                    color = if (selected) selectedColor else itemColor,
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onCategorySelected(PinnedCategory, PinnedCategory) },
@@ -381,11 +423,7 @@ private fun CategoryDrawerContent(
                 items(categories, key = { category -> "$primary-$category" }) { category ->
                     val selected = primary == selectedPrimary && category == selectedCategory
                     Surface(
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.secondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surface
-                        },
+                        color = if (selected) selectedColor else itemColor,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onCategorySelected(primary, category) },
@@ -547,6 +585,8 @@ private fun StardbLoginWebView(
 
 @Composable
 private fun AchievementHome(
+    contentPadding: PaddingValues,
+    page: LayerBackdrop?,
     state: AchievementScreenState,
     isRefreshing: Boolean,
     error: String?,
@@ -595,27 +635,22 @@ private fun AchievementHome(
         }
     }
 
+    // The filter panel floats over the top of the list (as glass, refracting it) and hides while scrolling down.
+    val density = LocalDensity.current
+    var filterPanelHeight by remember { mutableStateOf(0.dp) }
+    val topPadding = contentPadding.calculateTopPadding()
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().nestedScroll(filterScrollConnection),
+        modifier = Modifier.fillMaxSize().glassContent(page).nestedScroll(filterScrollConnection),
         state = listState,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = topPadding + FilterPanelGap + filterPanelHeight + FilterPanelGap,
+            bottom = 12.dp + contentPadding.calculateBottomPadding(),
+        ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        stickyHeader(key = "filters") {
-            AnimatedVisibility(
-                visible = filtersVisible,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                CompactFilterPanel(
-                    state = state,
-                    isRefreshing = isRefreshing,
-                    onSearchChange = onSearchChange,
-                    onCompletionFilterChange = onCompletionFilterChange,
-                    onVersionChange = onVersionChange,
-                )
-            }
-        }
         if (state.achievements.isEmpty()) {
             item {
                 EmptyState(total = state.totalCount)
@@ -632,6 +667,23 @@ private fun AchievementHome(
                 )
             }
         }
+    }
+    AnimatedVisibility(
+        visible = filtersVisible,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+        modifier = Modifier.padding(top = topPadding + FilterPanelGap, start = 16.dp, end = 16.dp),
+    ) {
+        CompactFilterPanel(
+            page = page,
+            modifier = Modifier.onSizeChanged { filterPanelHeight = with(density) { it.height.toDp() } },
+            state = state,
+            isRefreshing = isRefreshing,
+            onSearchChange = onSearchChange,
+            onCompletionFilterChange = onCompletionFilterChange,
+            onVersionChange = onVersionChange,
+        )
+    }
     }
 
     error?.let { ErrorDialog(error = it, onDismiss = onDismissError) }
@@ -686,23 +738,28 @@ private fun ProgressPanel(
 
 @Composable
 private fun CompactFilterPanel(
+    page: LayerBackdrop?,
+    modifier: Modifier,
     state: AchievementScreenState,
     isRefreshing: Boolean,
     onSearchChange: (String) -> Unit,
     onCompletionFilterChange: (CompletionFilter) -> Unit,
     onVersionChange: (String) -> Unit,
 ) {
+    val glass = page != null
+    val shape = if (glass) GlassPanelShape else RoundedCornerShape(8.dp)
     Surface(
-        tonalElevation = 1.dp,
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth(),
+        tonalElevation = if (glass) 0.dp else 1.dp,
+        shape = shape,
+        color = if (glass) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
+        modifier = modifier.fillMaxWidth().glass(page, shape, GlassStyle.Panel),
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             CompactSearchField(
+                glass = glass,
                 value = state.filter.search,
                 onValueChange = onSearchChange,
                 isRefreshing = isRefreshing,
@@ -718,10 +775,12 @@ private fun CompactFilterPanel(
                         selected = state.filter.completionFilter == filter,
                         onClick = { onCompletionFilterChange(filter) },
                         label = { Text(filter.label(), style = MaterialTheme.typography.labelSmall) },
+                        colors = filterChipColors(glass),
                         modifier = Modifier.height(30.dp),
                     )
                 }
                 VersionDropdown(
+                    glass = glass,
                     versions = state.versions,
                     selected = state.filter.version,
                     onSelected = onVersionChange,
@@ -733,6 +792,7 @@ private fun CompactFilterPanel(
 
 @Composable
 private fun CompactSearchField(
+    glass: Boolean,
     value: String,
     onValueChange: (String) -> Unit,
     isRefreshing: Boolean,
@@ -752,8 +812,9 @@ private fun CompactSearchField(
     }
 
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surface,
+        shape = if (glass) GlassFieldShape else RoundedCornerShape(8.dp),
+        // On glass a faint shade instead of a solid box, so the field stays part of the glass.
+        color = if (glass) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f) else MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
         modifier = Modifier.fillMaxWidth().height(42.dp),
     ) {
@@ -912,6 +973,7 @@ private fun AchievementScreenState.selectedCategory(): String =
 
 @Composable
 private fun VersionDropdown(
+    glass: Boolean,
     versions: List<String>,
     selected: String,
     onSelected: (String) -> Unit,
@@ -927,9 +989,10 @@ private fun VersionDropdown(
                     style = MaterialTheme.typography.labelSmall,
                 )
             },
+            colors = filterChipColors(glass),
             modifier = Modifier.height(30.dp),
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        GlassDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(text = { Text("全部版本") }, onClick = {
                 expanded = false
                 onSelected("")
@@ -947,6 +1010,18 @@ private fun VersionDropdown(
 private fun String.asVersionLabel(): String = if (startsWith("V", ignoreCase = true)) this else "V$this"
 
 private const val PinnedCategory = "置顶"
+
+private val FilterPanelGap = 12.dp
+private val GlassPanelShape = RoundedCornerShape(20.dp)
+private val GlassFieldShape = RoundedCornerShape(14.dp)
+
+/** Chips on glass: the selected one is a light in the glass instead of a solid block. */
+@Composable
+private fun filterChipColors(glass: Boolean) = if (glass) {
+    FilterChipDefaults.filterChipColors(selectedContainerColor = glassSelectedColor())
+} else {
+    FilterChipDefaults.filterChipColors()
+}
 
 private fun Modifier.openDrawerOnHorizontalSwipe(
     enabled: Boolean,
@@ -991,7 +1066,7 @@ private fun CategoryDropdown(
             label = { Text(if (selected.isBlank()) "全部分类" else selected, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             leadingIcon = { Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp)) },
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        GlassDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(text = { Text("全部分类") }, onClick = {
                 expanded = false
                 onSelected("")
@@ -1221,7 +1296,7 @@ private fun AchievementDetailDialog(
     )
     return
 
-    AlertDialog(
+    GlassAlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("关闭") }
@@ -1260,7 +1335,7 @@ private fun CompactAchievementDetailDialog(
         val query = URLEncoder.encode("绝区零成就${achievement.name}", "UTF-8")
         "https://search.bilibili.com/all?keyword=$query"
     }
-    AlertDialog(
+    GlassAlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
             TextButton(
@@ -1361,7 +1436,7 @@ private fun SyncStatusPill(text: String, status: SyncStatus) {
 
 @Composable
 private fun ErrorDialog(error: String, onDismiss: () -> Unit) {
-    AlertDialog(
+    GlassAlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Default.Error, contentDescription = null) },
         title = { Text("操作失败") },

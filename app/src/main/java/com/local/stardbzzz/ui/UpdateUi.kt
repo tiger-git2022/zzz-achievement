@@ -18,13 +18,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.Switch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -48,6 +48,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.local.stardbzzz.data.update.AppUpdater
 import com.local.stardbzzz.data.update.UpdateState
+import com.local.stardbzzz.ui.glass.GlassAlertDialog
+import com.local.stardbzzz.ui.glass.GlassScaffold
+import com.local.stardbzzz.ui.glass.GlassSettings
+import com.local.stardbzzz.ui.glass.glassContent
 import java.io.File
 import java.util.Locale
 
@@ -57,9 +61,12 @@ fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit, onOpenScan: () -> Un
     val updateState by updater.state.collectAsStateWithLifecycle()
     BackHandler(onBack = onBack)
 
-    Scaffold(
-        topBar = {
+    val glassEnabled by GlassSettings.enabled.collectAsStateWithLifecycle()
+    GlassScaffold(
+        topBar = { barModifier, barColors ->
             TopAppBar(
+                modifier = barModifier,
+                colors = barColors,
                 title = { Text("设置") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -68,8 +75,10 @@ fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit, onOpenScan: () -> Un
                 },
             )
         },
-    ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+    ) { padding, page ->
+        Column(
+            modifier = Modifier.fillMaxSize().glassContent(page).verticalScroll(rememberScrollState()).padding(padding),
+        ) {
             ListItem(
                 headlineContent = { Text("当前版本") },
                 supportingContent = { Text(updater.currentVersionName) },
@@ -85,6 +94,14 @@ fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit, onOpenScan: () -> Un
                 modifier = Modifier.clickable(enabled = updateState == UpdateState.Idle) {
                     updater.checkManually()
                 },
+            )
+            ListItem(
+                headlineContent = { Text("液态玻璃") },
+                supportingContent = { Text("顶栏、筛选栏、分类抽屉、对话框和菜单用玻璃效果（安卓 13 起有折射，12 起有模糊）") },
+                trailingContent = {
+                    Switch(checked = glassEnabled, onCheckedChange = GlassSettings::setEnabled)
+                },
+                modifier = Modifier.clickable { GlassSettings.setEnabled(!glassEnabled) },
             )
             ListItem(
                 headlineContent = { Text("游戏成就扫描") },
@@ -124,7 +141,7 @@ fun UpdateDialogs(updater: AppUpdater) {
     }
 
     when (val current = state) {
-        is UpdateState.Available -> AlertDialog(
+        is UpdateState.Available -> GlassAlertDialog(
             onDismissRequest = updater::postpone,
             title = { Text("发现新版本 ${current.release.tagName}") },
             text = {
@@ -151,7 +168,7 @@ fun UpdateDialogs(updater: AppUpdater) {
             },
         )
 
-        is UpdateState.Downloading -> AlertDialog(
+        is UpdateState.Downloading -> GlassAlertDialog(
             onDismissRequest = {},
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
             title = { Text("正在下载 ${current.release.tagName}") },
@@ -180,7 +197,7 @@ fun UpdateDialogs(updater: AppUpdater) {
                     waitingForInstallPermission = true
                 }
             }
-            AlertDialog(
+            GlassAlertDialog(
                 onDismissRequest = {},
                 properties = DialogProperties(dismissOnClickOutside = false),
                 title = { Text(if (waitingForInstallPermission) "需要安装权限" else "下载完成") },

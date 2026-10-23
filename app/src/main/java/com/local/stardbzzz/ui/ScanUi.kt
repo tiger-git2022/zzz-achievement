@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -48,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.local.stardbzzz.data.repository.AchievementListInfo
@@ -58,10 +61,12 @@ import com.local.stardbzzz.scan.ScanDiff
 import com.local.stardbzzz.scan.ScanReport
 import com.local.stardbzzz.scan.ScanState
 import com.local.stardbzzz.scan.ScreenCaptureService
-import kotlinx.coroutines.launch
+import com.local.stardbzzz.ui.glass.GlassScaffold
+import com.local.stardbzzz.ui.glass.glassContent
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,9 +93,11 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
+    GlassScaffold(
+        topBar = { barModifier, barColors ->
             TopAppBar(
+                modifier = barModifier,
+                colors = barColors,
                 title = { Text("游戏成就扫描") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -99,10 +106,17 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
                 },
             )
         },
-    ) { padding ->
+    ) { padding, page ->
+        val layoutDirection = LocalLayoutDirection.current
+        // The list scrolls under the glass top bar.
         LazyColumn(
-            modifier = Modifier.padding(padding).fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp),
+            modifier = Modifier.fillMaxSize().glassContent(page),
+            contentPadding = PaddingValues(
+                start = padding.calculateStartPadding(layoutDirection),
+                top = padding.calculateTopPadding(),
+                end = padding.calculateEndPadding(layoutDirection),
+                bottom = 24.dp + padding.calculateBottomPadding(),
+            ),
         ) {
             item {
                 Text(

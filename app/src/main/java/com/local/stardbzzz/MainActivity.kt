@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.local.stardbzzz.ui.AchievementApp
 import com.local.stardbzzz.ui.AchievementViewModel
 import com.local.stardbzzz.ui.AchievementViewModelFactory
+import com.local.stardbzzz.ui.glass.GlassHost
 import com.local.stardbzzz.ui.theme.ZZZAchievementTheme
 
 class MainActivity : ComponentActivity() {
@@ -23,14 +24,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             ZZZAchievementTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    val viewModel: AchievementViewModel = viewModel(
-                        factory = AchievementViewModelFactory(repository),
-                    )
-                    AchievementApp(
-                        viewModel = viewModel,
-                        updater = container.updater,
-                        scanCoordinator = container.scanCoordinator,
-                    )
+                    GlassHost {
+                        val viewModel: AchievementViewModel = viewModel(
+                            factory = AchievementViewModelFactory(repository),
+                        )
+                        AchievementApp(
+                            viewModel = viewModel,
+                            updater = container.updater,
+                            scanCoordinator = container.scanCoordinator,
+                        )
+                    }
                 }
             }
         }

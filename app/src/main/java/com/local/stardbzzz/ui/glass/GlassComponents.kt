@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -240,6 +241,8 @@ fun BoxScope.GlassDropdownMenu(
         val anchorTopLeft = host.localPositionOf(anchorCoordinates, Offset.Zero)
         val anchorSize = anchorCoordinates.size
         val shown = remember { MutableTransitionState(false) }.apply { targetState = true }
+        // The app draws edge to edge: the menu stays clear of the status, navigation and cutout areas.
+        val safeInsets = WindowInsets.safeDrawing
         // The overlay layer lies at the host's origin, so host coordinates are layout coordinates here.
         Layout(
             modifier = Modifier.fillMaxSize(),
@@ -267,25 +270,30 @@ fun BoxScope.GlassDropdownMenu(
             val gap = 4.dp.roundToPx()
             val maxWidth = constraints.maxWidth
             val maxHeight = constraints.maxHeight
+            // The area the menu may use: the safe area less the margin.
+            val left = safeInsets.getLeft(this, layoutDirection) + margin
+            val right = maxWidth - safeInsets.getRight(this, layoutDirection) - margin
+            val top = safeInsets.getTop(this) + margin
+            val bottom = maxHeight - safeInsets.getBottom(this) - margin
             val measurable = measurables.firstOrNull()
                 ?: return@Layout layout(constraints.maxWidth, constraints.maxHeight) {}
             val placeable = measurable.measure(
                 Constraints(
-                    maxWidth = (maxWidth - 2 * margin).coerceAtLeast(0),
-                    maxHeight = (maxHeight - 2 * margin).coerceAtLeast(0),
+                    maxWidth = (right - left).coerceAtLeast(0),
+                    maxHeight = (bottom - top).coerceAtLeast(0),
                 ),
             )
             layout(maxWidth, maxHeight) {
                 val x = anchorTopLeft.x.roundToInt()
-                    .coerceAtMost(maxWidth - margin - placeable.width)
-                    .coerceAtLeast(margin)
+                    .coerceAtMost(right - placeable.width)
+                    .coerceAtLeast(left)
                 val anchorTop = anchorTopLeft.y.roundToInt()
                 val below = anchorTop + anchorSize.height + gap
                 val above = anchorTop - gap - placeable.height
                 val y = when {
-                    below + placeable.height <= maxHeight - margin -> below
-                    above >= margin -> above
-                    else -> (maxHeight - margin - placeable.height).coerceAtLeast(margin)
+                    below >= top && below + placeable.height <= bottom -> below
+                    above >= top -> above
+                    else -> (bottom - placeable.height).coerceAtLeast(top)
                 }
                 placeable.place(x, y)
             }

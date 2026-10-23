@@ -37,6 +37,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.platform.LocalLayoutDirection
 import com.local.stardbzzz.ui.glass.GlassScaffold
 import com.local.stardbzzz.ui.glass.glassContent
 import androidx.compose.runtime.Composable
@@ -104,11 +105,14 @@ fun ScanScreen(coordinator: ScanCoordinator, onBack: () -> Unit) {
             )
         },
     ) { padding, page ->
+        val layoutDirection = LocalLayoutDirection.current
         // The list scrolls under the glass top bar.
         LazyColumn(
             modifier = Modifier.fillMaxSize().glassContent(page),
             contentPadding = PaddingValues(
+                start = padding.calculateStartPadding(layoutDirection),
                 top = padding.calculateTopPadding(),
+                end = padding.calculateEndPadding(layoutDirection),
                 bottom = 24.dp + padding.calculateBottomPadding(),
             ),
         ) {

@@ -38,6 +38,7 @@ import androidx.compose.material3.TopAppBarColors
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
@@ -177,6 +179,7 @@ private fun GlassDialogFrame(
 ) {
     // Takes back even when it does not dismiss, like a dialog window.
     BackHandler { if (dismissOnBackPress) onDismissRequest() }
+    ClearFocusOnOpen()
     val shown = remember { MutableTransitionState(false) }.apply { targetState = true }
     Box(Modifier.fillMaxSize()) {
         AnimatedVisibility(visibleState = shown, modifier = Modifier.matchParentSize(), enter = fadeIn()) {
@@ -227,6 +230,7 @@ fun BoxScope.GlassDropdownMenu(
     if (!expanded) return
     GlassOverlay {
         BackHandler(onBack = onDismissRequest)
+        ClearFocusOnOpen()
         Box(Modifier.fillMaxSize().clickable(interactionSource = null, indication = null, onClick = onDismissRequest))
         val host = overlay.coordinates
         val anchorCoordinates = anchor
@@ -287,4 +291,14 @@ fun BoxScope.GlassDropdownMenu(
             }
         }
     }
+}
+
+/**
+ * Takes the focus off the page when a dialog or menu opens (a dialog window would take it), so typing no longer goes
+ * to the search field under it and the keyboard closes.
+ */
+@Composable
+private fun ClearFocusOnOpen() {
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(Unit) { focusManager.clearFocus(force = true) }
 }

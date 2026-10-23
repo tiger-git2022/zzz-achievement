@@ -16,7 +16,12 @@ val hasReleaseSigning = releaseKeystoreFile?.isFile == true &&
 
 android {
     namespace = "com.local.stardbzzz"
-    compileSdk = 37
+    // Compose 1.13 needs Android 37.1 or later to compile against (as in the EhViewer fork).
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
 
     defaultConfig {
         applicationId = "com.local.stardbzzz"

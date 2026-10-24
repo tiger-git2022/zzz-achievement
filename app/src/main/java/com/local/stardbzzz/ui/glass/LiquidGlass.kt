@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
@@ -60,26 +61,71 @@ import kotlinx.coroutines.flow.StateFlow
  * The bending needs Android 13, the blur Android 12. On older systems the glass is only tinted, so it is tinted more.
  */
 
-/** The 设置 → 液态玻璃 switch, on by default. */
+/**
+ * The 设置 → 液态玻璃 switch (on by default) and the glass of the drawer, the dialogs and the menus, set like in
+ * EhViewer (Settings → EH there, same ranges and defaults): the blur in tenths of a dp, the tint in percent and the
+ * color fringes at the edge from 0 (none) to 100.
+ */
 object GlassSettings {
     private const val PREFS = "ui"
     private const val KEY_ENABLED = "liquid_glass"
+    private const val KEY_SHEET_BLUR = "sheet_glass_blur"
+    private const val KEY_SHEET_TINT = "sheet_glass_tint"
+    private const val KEY_SHEET_FRINGE = "sheet_glass_fringe"
+    const val DEFAULT_SHEET_BLUR = 25
+    const val DEFAULT_SHEET_TINT = 40
+    const val DEFAULT_SHEET_FRINGE = 50
 
     private var prefs: SharedPreferences? = null
     private val state = MutableStateFlow(true)
     val enabled: StateFlow<Boolean> = state
+    private val sheetBlurState = MutableStateFlow(DEFAULT_SHEET_BLUR)
+    val sheetBlur: StateFlow<Int> = sheetBlurState
+    private val sheetTintState = MutableStateFlow(DEFAULT_SHEET_TINT)
+    val sheetTint: StateFlow<Int> = sheetTintState
+    private val sheetFringeState = MutableStateFlow(DEFAULT_SHEET_FRINGE)
+    val sheetFringe: StateFlow<Int> = sheetFringeState
 
     fun init(context: Context) {
         val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs = preferences
         state.value = preferences.getBoolean(KEY_ENABLED, true)
+        sheetBlurState.value = preferences.getInt(KEY_SHEET_BLUR, DEFAULT_SHEET_BLUR)
+        sheetTintState.value = preferences.getInt(KEY_SHEET_TINT, DEFAULT_SHEET_TINT)
+        sheetFringeState.value = preferences.getInt(KEY_SHEET_FRINGE, DEFAULT_SHEET_FRINGE)
     }
 
     fun setEnabled(enabled: Boolean) {
         state.value = enabled
         prefs?.edit()?.putBoolean(KEY_ENABLED, enabled)?.apply()
     }
+
+    fun setSheetBlur(value: Int) = setInt(sheetBlurState, KEY_SHEET_BLUR, value)
+
+    fun setSheetTint(value: Int) = setInt(sheetTintState, KEY_SHEET_TINT, value)
+
+    fun setSheetFringe(value: Int) = setInt(sheetFringeState, KEY_SHEET_FRINGE, value)
+
+    private fun setInt(flow: MutableStateFlow<Int>, key: String, value: Int) {
+        val clamped = value.coerceIn(0, 100)
+        flow.value = clamped
+        prefs?.edit()?.putInt(key, clamped)?.apply()
+    }
 }
+
+/** The glass of the drawer, the dialogs and the menus as set in [GlassSettings]. */
+@Immutable
+data class SheetGlassTuning(val blur: Dp, val tint: Float, val fringe: Float) {
+    companion object {
+        val Default = SheetGlassTuning(
+            blur = (GlassSettings.DEFAULT_SHEET_BLUR / 10f).dp,
+            tint = GlassSettings.DEFAULT_SHEET_TINT / 100f,
+            fringe = GlassSettings.DEFAULT_SHEET_FRINGE / 100f,
+        )
+    }
+}
+
+val LocalSheetGlassTuning = staticCompositionLocalOf { SheetGlassTuning.Default }
 
 /** Whether liquid glass is on; the Material look is kept everywhere while it is off. */
 val LocalGlassEnabled = staticCompositionLocalOf { false }
@@ -95,7 +141,10 @@ enum class GlassStyle(val tintAlpha: Float) {
     /** A bar or panel with text (the top bar, the filter panel): a little blur so text over the list stays readable. */
     Panel(0.2f),
 
-    /** A drawer, a dialog or a menu: blurred glass bending gently over a wide edge, with a deeper shadow. */
+    /**
+     * A drawer, a dialog or a menu: blurred glass bending gently over a wide edge, with a deeper shadow. The blur, the
+     * tint and the color fringes are set in the settings (see [SheetGlassTuning]); this tint is unused.
+     */
     Sheet(0.4f),
 }
 
@@ -134,7 +183,9 @@ fun Modifier.glass(backdrop: Backdrop?, shape: Shape, style: GlassStyle): Modifi
     if (backdrop == null) return this
     val colors = MaterialTheme.colorScheme
     val dark = colors.surface.luminance() < 0.5f
-    val alpha = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) maxOf(style.tintAlpha, UnblurredTint) else style.tintAlpha
+    val tuning = LocalSheetGlassTuning.current
+    val styleAlpha = if (style == GlassStyle.Sheet) tuning.tint else style.tintAlpha
+    val alpha = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) maxOf(styleAlpha, UnblurredTint) else styleAlpha
     // Light themes tint white: tinted with the gray surface colors, the glass was darker than the page.
     val tint = if (dark) colors.surfaceContainerHigh.copy(alpha = alpha) else Color.White.copy(alpha = alpha)
     val edge = when {
@@ -161,9 +212,12 @@ fun Modifier.glass(backdrop: Backdrop?, shape: Shape, style: GlassStyle): Modifi
                     blur(4f.dp.toPx())
                     lens(16f.dp.toPx(), 28f.dp.toPx(), chromaticAberration = true)
                 }
+                // A wide gentle bend at the edge with the blur and the color fringes set in the settings (up to
+                // 12 dp apart over the outer 24 dp), like the drawers and dialogs of EhViewer.
                 GlassStyle.Sheet -> {
-                    blur(2.5f.dp.toPx())
+                    if (tuning.blur > 0.dp) blur(tuning.blur.toPx())
                     lens(25f.dp.toPx(), 10f.dp.toPx())
+                    edgeFringe(24f.dp.toPx(), tuning.fringe * 12f.dp.toPx())
                 }
             }
         },
@@ -240,8 +294,18 @@ val LocalGlassOverlay = staticCompositionLocalOf<GlassOverlayState?> { null }
 @Composable
 fun GlassHost(content: @Composable () -> Unit) {
     val enabled by GlassSettings.enabled.collectAsState()
+    val sheetBlur by GlassSettings.sheetBlur.collectAsState()
+    val sheetTint by GlassSettings.sheetTint.collectAsState()
+    val sheetFringe by GlassSettings.sheetFringe.collectAsState()
+    val tuning = remember(sheetBlur, sheetTint, sheetFringe) {
+        SheetGlassTuning(blur = (sheetBlur / 10f).dp, tint = sheetTint / 100f, fringe = sheetFringe / 100f)
+    }
     val overlay = remember { GlassOverlayState() }
-    CompositionLocalProvider(LocalGlassEnabled provides enabled, LocalGlassOverlay provides overlay) {
+    CompositionLocalProvider(
+        LocalGlassEnabled provides enabled,
+        LocalGlassOverlay provides overlay,
+        LocalSheetGlassTuning provides tuning,
+    ) {
         val backdrop = rememberGlassBackdrop()
         CompositionLocalProvider(LocalAppBackdrop provides backdrop) {
             Box(Modifier.fillMaxSize().onGloballyPositioned { overlay.coordinates = it }) {

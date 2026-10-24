@@ -5,12 +5,27 @@
 
 package com.local.stardbzzz.ui
 
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
+import android.webkit.CookieManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,29 +38,24 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
@@ -58,10 +68,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerDefaults
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -83,7 +93,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarColors
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
-import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -98,18 +107,23 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -119,13 +133,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import android.content.Intent
-import android.net.Uri
-import android.webkit.CookieManager
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.local.stardbzzz.R
 import com.local.stardbzzz.data.local.CompletionFilter
 import com.local.stardbzzz.data.local.SortMode
 import com.local.stardbzzz.data.local.SyncStatus
@@ -133,7 +144,6 @@ import com.local.stardbzzz.data.repository.AchievementScreenState
 import com.local.stardbzzz.data.repository.AchievementUiModel
 import com.local.stardbzzz.data.update.AppUpdater
 import com.local.stardbzzz.scan.ScanCoordinator
-import com.local.stardbzzz.R
 import com.local.stardbzzz.ui.glass.GlassAlertDialog
 import com.local.stardbzzz.ui.glass.GlassDropdownMenu
 import com.local.stardbzzz.ui.glass.GlassEdge
@@ -145,18 +155,16 @@ import com.local.stardbzzz.ui.glass.glass
 import com.local.stardbzzz.ui.glass.glassContent
 import com.local.stardbzzz.ui.glass.glassSelectedColor
 import com.local.stardbzzz.ui.glass.rememberGlassBackdrop
-import com.kyant.backdrop.backdrops.LayerBackdrop
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import android.graphics.BitmapFactory
+import java.net.URL
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.net.URL
-import java.net.URLEncoder
 import kotlin.math.abs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoordinator: ScanCoordinator) {
@@ -207,6 +215,13 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoo
 
     // The page with its top bar, for the glass of the category drawer.
     val screenBackdrop = rememberGlassBackdrop()
+    // Like EhViewer, the page behind the scrim blurs as the drawer opens (up to 10 dp), so the drawer stands out from it.
+    // The drawer still refracts the page as recorded, unblurred: the blur is on the layer around the recording.
+    val pageBlur by animateDpAsState(
+        targetValue = if (screenBackdrop != null && drawerState.targetValue == DrawerValue.Open) 10.dp else 0.dp,
+        animationSpec = tween(durationMillis = 256),
+        label = "drawerPageBlur",
+    )
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = status.hasCredentials,
@@ -221,7 +236,14 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoo
             )
         },
     ) {
-    Box(Modifier.fillMaxSize().glassContent(screenBackdrop)) {
+    Box(
+        Modifier.fillMaxSize().graphicsLayer {
+            if (pageBlur > 0.dp && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                renderEffect = BlurEffect(pageBlur.toPx(), pageBlur.toPx(), TileMode.Clamp)
+                clip = true
+            }
+        }.glassContent(screenBackdrop),
+    ) {
     GlassScaffold(
         modifier = Modifier.openDrawerOnHorizontalSwipe(
             enabled = status.hasCredentials && drawerState.isClosed,
@@ -368,80 +390,106 @@ private fun CategoryDrawerContent(
 ) {
     val selectedPrimary = state.selectedPrimaryCategory()
     val selectedCategory = state.selectedCategory()
-    // On glass the items are clear and the selected one is a light in the glass.
+    // Like the drawers of EhViewer: on glass the items are clear and the selected one is a light in the glass.
     val glass = backdrop != null
-    val selectedColor = if (glass) glassSelectedColor() else MaterialTheme.colorScheme.secondaryContainer
-    val itemColor = if (glass) Color.Transparent else MaterialTheme.colorScheme.surface
     ModalDrawerSheet(
-        modifier = Modifier.fillMaxWidth(0.67f).edgeGlass(backdrop, GlassEdge.End, GlassStyle.Sheet),
+        modifier = Modifier.fillMaxWidth(0.67f).edgeGlass(backdrop, GlassEdge.End, GlassStyle.Sheet, DrawerGlassCorner),
+        drawerShape = if (glass) RoundedCornerShape(topEnd = DrawerGlassCorner, bottomEnd = DrawerGlassCorner) else DrawerDefaults.shape,
         drawerContainerColor = if (glass) Color.Transparent else DrawerDefaults.modalContainerColor,
+        drawerContentColor = MaterialTheme.colorScheme.onSurface,
         drawerTonalElevation = if (glass) 0.dp else DrawerDefaults.ModalDrawerElevation,
     ) {
         Text(
             text = "分类",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+            modifier = Modifier.padding(start = 28.dp, end = 28.dp, top = 20.dp, bottom = 8.dp),
         )
-        HorizontalDivider()
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = 8.dp),
+            contentPadding = PaddingValues(bottom = 12.dp),
         ) {
             item(key = "pinned-category") {
-                val selected = selectedPrimary == PinnedCategory
-                Surface(
-                    color = if (selected) selectedColor else itemColor,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onCategorySelected(PinnedCategory, PinnedCategory) },
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 11.dp),
-                    ) {
-                        Icon(Icons.Default.PushPin, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            text = PinnedCategory,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    }
-                }
+                DrawerCategoryItem(
+                    text = PinnedCategory,
+                    selected = selectedPrimary == PinnedCategory,
+                    glass = glass,
+                    icon = Icons.Default.PushPin,
+                    onClick = { onCategorySelected(PinnedCategory, PinnedCategory) },
+                )
             }
-            item(key = "pinned-divider") { HorizontalDivider() }
             state.categoryGroups.forEach { (primary, categories) ->
                 item(key = "primary-$primary") {
                     Text(
                         text = primary,
                         style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(start = 28.dp, end = 28.dp, top = 16.dp, bottom = 4.dp),
                     )
                 }
                 items(categories, key = { category -> "$primary-$category" }) { category ->
-                    val selected = primary == selectedPrimary && category == selectedCategory
-                    Surface(
-                        color = if (selected) selectedColor else itemColor,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onCategorySelected(primary, category) },
-                    ) {
-                        Text(
-                            text = category,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 28.dp, vertical = 9.dp),
-                        )
-                    }
+                    DrawerCategoryItem(
+                        text = category,
+                        selected = primary == selectedPrimary && category == selectedCategory,
+                        glass = glass,
+                        onClick = { onCategorySelected(primary, category) },
+                    )
                 }
             }
         }
     }
 }
+
+/** A category in the drawer: a pill like the items of the EhViewer drawers, the selected one lit. */
+@Composable
+private fun DrawerCategoryItem(
+    text: String,
+    selected: Boolean,
+    glass: Boolean,
+    onClick: () -> Unit,
+    icon: ImageVector? = null,
+) {
+    val colors = MaterialTheme.colorScheme
+    val container = when {
+        !selected -> Color.Transparent
+        glass -> glassSelectedColor()
+        else -> colors.secondaryContainer
+    }
+    val content = when {
+        !selected -> colors.onSurface
+        glass -> colors.primary
+        else -> colors.onSecondaryContainer
+    }
+    Surface(
+        selected = selected,
+        onClick = onClick,
+        shape = CircleShape,
+        color = container,
+        contentColor = content,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 1.dp).heightIn(min = 44.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        ) {
+            if (icon != null) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(12.dp))
+            }
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+// The corner of the drawer glass toward the page, as in EhViewer.
+private val DrawerGlassCorner = 15.dp
 
 @Composable
 private fun LoginScreen(

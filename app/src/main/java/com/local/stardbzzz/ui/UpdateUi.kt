@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -24,9 +26,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.Switch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -38,8 +41,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
@@ -54,6 +59,7 @@ import com.local.stardbzzz.ui.glass.GlassSettings
 import com.local.stardbzzz.ui.glass.glassContent
 import java.io.File
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,6 +109,32 @@ fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit, onOpenScan: () -> Un
                 },
                 modifier = Modifier.clickable { GlassSettings.setEnabled(!glassEnabled) },
             )
+            // The glass of the drawer, the dialogs and the menus, set like in EhViewer.
+            AnimatedVisibility(visible = glassEnabled) {
+                Column {
+                    val sheetBlur by GlassSettings.sheetBlur.collectAsStateWithLifecycle()
+                    val sheetTint by GlassSettings.sheetTint.collectAsStateWithLifecycle()
+                    val sheetFringe by GlassSettings.sheetFringe.collectAsStateWithLifecycle()
+                    GlassSliderItem(
+                        title = "侧边栏、对话框和菜单的模糊度",
+                        summary = "数值除以 10 是模糊半径（dp）：0 不模糊，默认 ${GlassSettings.DEFAULT_SHEET_BLUR}。模糊需要安卓 12 以上",
+                        value = sheetBlur,
+                        onValueChange = GlassSettings::setSheetBlur,
+                    )
+                    GlassSliderItem(
+                        title = "侧边栏、对话框和菜单的不透明度",
+                        summary = "玻璃上底色的百分比：越大越不透明、越容易看清文字，默认 ${GlassSettings.DEFAULT_SHEET_TINT}",
+                        value = sheetTint,
+                        onValueChange = GlassSettings::setSheetTint,
+                    )
+                    GlassSliderItem(
+                        title = "侧边栏、对话框和菜单的边缘色差",
+                        summary = "玻璃边缘红绿蓝分开的程度，像真实的玻璃边：0 关闭，默认 ${GlassSettings.DEFAULT_SHEET_FRINGE}。需要安卓 13 以上",
+                        value = sheetFringe,
+                        onValueChange = GlassSettings::setSheetFringe,
+                    )
+                }
+            }
             ListItem(
                 headlineContent = { Text("游戏成就扫描") },
                 supportingContent = { Text("自动识别游戏成就页，把完成状态同步到 stardb") },
@@ -110,6 +142,34 @@ fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit, onOpenScan: () -> Un
             )
         }
     }
+}
+
+/** A 0–100 setting in steps of 5, like the glass sliders of EhViewer. */
+@Composable
+private fun GlassSliderItem(title: String, summary: String, value: Int, onValueChange: (Int) -> Unit) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Column {
+                Text(summary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Slider(
+                        value = value.toFloat(),
+                        onValueChange = { onValueChange((it / 5f).roundToInt() * 5) },
+                        valueRange = 0f..100f,
+                        steps = 19,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = value.toString(),
+                        style = MaterialTheme.typography.labelLarge,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.width(40.dp),
+                    )
+                }
+            }
+        },
+    )
 }
 
 /** Hosts the update prompt, download progress and install hand-off; render once at the app root. */

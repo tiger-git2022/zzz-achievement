@@ -244,4 +244,16 @@ class QuickSyncTest {
         group: String = "",
         description: String = "",
     ) = ScanCandidate(id, name, description, category, completed, "1.0", group, tab, percent)
+
+    @Test
+    fun aRematchMovesTheBaselineLikeAnApply() {
+        val baseline = QuickSyncBaseline(offset = -4, inProgressIds = setOf("a"))
+        val rematch = Rematch(stillUnmatched = emptyList(), matched = 3, diffs = emptyList(), inProgressIds = setOf("n1"), completedLocally = 1)
+
+        val moved = QuickSync.baselineAfterRematch(baseline, rematch)
+
+        // n3 now counts locally (stardb has it checked) while 完成数 counted it all along.
+        assertEquals(-5, moved.offset)
+        assertEquals(setOf("a", "n1"), moved.inProgressIds)
+    }
 }

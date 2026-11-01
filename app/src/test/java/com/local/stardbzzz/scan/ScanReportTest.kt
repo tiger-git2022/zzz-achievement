@@ -371,6 +371,60 @@ class ScanReportTest {
         assertEquals(1, open.localCompletedAfterSync)
     }
 
+    @Test
+    fun leavesTheArcadeGamesOut() {
+        // 25马赫 and the other arcade games (其他) aren't on the achievement page: never matched, counted or missed.
+        val local = listOf(
+            ScanCandidate("h1", "英雄之旅", "在「预言之下」中，赢得一场史诗般的单挑。", "空洞探索指南", true, tab = "探索"),
+            ScanCandidate("h2", "英雄之旅", "使用「斗笠客」通关难度5", "怪奇旅伴", false, tab = "其他"),
+            ScanCandidate("m1", "安全驾驶", "无伤通关。", "25马赫", true, tab = "其他"),
+            ScanCandidate("m2", "一骑绝尘", "第一名通关。", "25马赫", true, tab = "其他"),
+        )
+        val rows = listOf(ObservedRow("探索", "空洞探索指南", "英雄之旅", "在「预言之下」中，赢得一场史诗般的单挑。", RowStatus.InProgress(0, 1)))
+
+        val report = ScanReportBuilder.build(rows, local, gameCompletedCount = 0)
+
+        assertEquals(1, report.localCompletedCount)
+        assertEquals(1, report.localCompletedRecords)
+        assertEquals(2, report.arcadeCompleted)
+        assertEquals(emptyList<ScanCandidate>(), report.localCompletedNotSeen)
+        // The diff says where it is and what it says, and that an arcade game has an achievement of the same name.
+        val diff = report.diffs.single()
+        assertEquals("h1", diff.id)
+        assertEquals("探索 / 空洞探索指南", diff.place)
+        assertEquals("在「预言之下」中，赢得一场史诗般的单挑。", diff.description)
+        assertEquals(listOf("其他 / 怪奇旅伴"), diff.namesakes)
+    }
+
+    @Test
+    fun rowsUnmatchedBeforeMatchARefreshedList() {
+        val rows = listOf(
+            ObservedRow("城市", "绳匠业务", "精选帖核心受众", "在绳网上阅读并回复10条「Fairy精选」帖子。", RowStatus.InProgress(3, 10)),
+            ObservedRow("战术", "战斗成就", "拟境崩解协议", "累计9次通关不同「极限」关卡。", RowStatus.Completed("2026-11-02")),
+            ObservedRow("战术", "战斗成就", "战术演算专家", "累计10次不受任何攻击通过「极限」关卡。", RowStatus.Completed("2026-11-02")),
+            ObservedRow("战术", "战斗成就", "认错的名字", "", RowStatus.Completed(null)),
+        )
+        // stardb has added three of them since; one of those was checked there by hand.
+        val refreshed = listOf(
+            ScanCandidate("n1", "精选帖核心受众", "在绳网上阅读并回复10条「Fairy精选」帖子。", "绳匠业务", false, tab = "城市"),
+            ScanCandidate("n2", "拟境崩解协议", "累计9次通关不同「极限」关卡。", "战斗成就", false, tab = "战术"),
+            ScanCandidate("n3", "战术演算专家", "累计10次不受任何攻击通过「极限」关卡。", "战斗成就", true, tab = "战术"),
+        )
+
+        val rematch = ScanReportBuilder.rematch(rows, refreshed)
+
+        assertEquals(listOf("认错的名字"), rematch.stillUnmatched.map { it.name })
+        assertEquals(3, rematch.matched)
+        assertEquals(listOf("n2"), rematch.diffs.map { it.id })
+        assertEquals(setOf("n1"), rematch.inProgressIds)
+        assertEquals(1, rematch.completedLocally)
+
+        val report = ScanReportBuilder.build(rows, emptyList(), gameCompletedCount = 10).withRematch(rematch)
+        assertEquals(listOf("认错的名字"), report.unmatched.map { it.name })
+        assertEquals(listOf("n2"), report.diffs.map { it.id })
+        assertEquals(3, report.rematched)
+    }
+
     private fun candidate(id: String, name: String, description: String, category: String, completed: Boolean = false) =
         ScanCandidate(id, name, description, category, completed)
 }

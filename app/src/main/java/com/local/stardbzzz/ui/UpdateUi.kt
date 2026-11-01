@@ -9,13 +9,18 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -44,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -53,6 +59,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.local.stardbzzz.data.update.AppUpdater
 import com.local.stardbzzz.data.update.UpdateState
+import com.local.stardbzzz.scan.ScanCoordinator
 import com.local.stardbzzz.ui.glass.GlassAlertDialog
 import com.local.stardbzzz.ui.glass.GlassScaffold
 import com.local.stardbzzz.ui.glass.GlassSettings
@@ -63,9 +70,24 @@ import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit, onOpenScan: () -> Unit) {
+fun SettingsScreen(
+    updater: AppUpdater,
+    scanCoordinator: ScanCoordinator,
+    onBack: () -> Unit,
+    /** Set when the scan overlay's 查看 opened the page: it scrolls to 游戏成就扫描, then calls [onScrolledToScan]. */
+    scrollToScan: Boolean = false,
+    onScrolledToScan: () -> Unit = {},
+) {
     val updateState by updater.state.collectAsStateWithLifecycle()
     BackHandler(onBack = onBack)
+    val scan = rememberScanSection(scanCoordinator)
+    val listState = rememberLazyListState()
+    LaunchedEffect(scrollToScan) {
+        if (scrollToScan) {
+            listState.animateScrollToItem(ItemsBeforeScan)
+            onScrolledToScan()
+        }
+    }
 
     val glassEnabled by GlassSettings.enabled.collectAsStateWithLifecycle()
     GlassScaffold(
@@ -82,67 +104,83 @@ fun SettingsScreen(updater: AppUpdater, onBack: () -> Unit, onOpenScan: () -> Un
             )
         },
     ) { padding, page ->
-        Column(
-            modifier = Modifier.fillMaxSize().glassContent(page).verticalScroll(rememberScrollState()).padding(padding),
+        val layoutDirection = LocalLayoutDirection.current
+        // The list scrolls under the glass top bar.
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().glassContent(page),
+            contentPadding = PaddingValues(
+                start = padding.calculateStartPadding(layoutDirection),
+                top = padding.calculateTopPadding(),
+                end = padding.calculateEndPadding(layoutDirection),
+                bottom = 24.dp + padding.calculateBottomPadding(),
+            ),
         ) {
-            ListItem(
-                headlineContent = { Text("当前版本") },
-                supportingContent = { Text(updater.currentVersionName) },
-            )
-            ListItem(
-                headlineContent = { Text("检查更新") },
-                supportingContent = { Text("从 GitHub Releases 获取最新版本") },
-                trailingContent = {
-                    if (updateState == UpdateState.Checking) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            item {
+                ListItem(
+                    headlineContent = { Text("当前版本") },
+                    supportingContent = { Text(updater.currentVersionName) },
+                )
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("检查更新") },
+                    supportingContent = { Text("从 GitHub Releases 获取最新版本") },
+                    trailingContent = {
+                        if (updateState == UpdateState.Checking) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        }
+                    },
+                    modifier = Modifier.clickable(enabled = updateState == UpdateState.Idle) {
+                        updater.checkManually()
+                    },
+                )
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("液态玻璃") },
+                    supportingContent = { Text("顶栏、筛选栏、分类抽屉、对话框和菜单用玻璃效果（安卓 13 起有折射，12 起有模糊）") },
+                    trailingContent = {
+                        Switch(checked = glassEnabled, onCheckedChange = GlassSettings::setEnabled)
+                    },
+                    modifier = Modifier.clickable { GlassSettings.setEnabled(!glassEnabled) },
+                )
+            }
+            item {
+                // The glass of the drawer, the dialogs and the menus, set like in EhViewer.
+                AnimatedVisibility(visible = glassEnabled) {
+                    Column {
+                        val sheetBlur by GlassSettings.sheetBlur.collectAsStateWithLifecycle()
+                        val sheetTint by GlassSettings.sheetTint.collectAsStateWithLifecycle()
+                        val sheetFringe by GlassSettings.sheetFringe.collectAsStateWithLifecycle()
+                        GlassSliderItem(
+                            title = "侧边栏、对话框和菜单的模糊度",
+                            summary = "数值除以 10 是模糊半径（dp）：0 不模糊，默认 ${GlassSettings.DEFAULT_SHEET_BLUR}。模糊需要安卓 12 以上",
+                            value = sheetBlur,
+                            onValueChange = GlassSettings::setSheetBlur,
+                        )
+                        GlassSliderItem(
+                            title = "侧边栏、对话框和菜单的不透明度",
+                            summary = "玻璃上底色的百分比：越大越不透明、越容易看清文字，默认 ${GlassSettings.DEFAULT_SHEET_TINT}",
+                            value = sheetTint,
+                            onValueChange = GlassSettings::setSheetTint,
+                        )
+                        GlassSliderItem(
+                            title = "侧边栏、对话框和菜单的边缘色差",
+                            summary = "玻璃边缘红绿蓝分开的程度，像真实的玻璃边：0 关闭，默认 ${GlassSettings.DEFAULT_SHEET_FRINGE}。需要安卓 13 以上",
+                            value = sheetFringe,
+                            onValueChange = GlassSettings::setSheetFringe,
+                        )
                     }
-                },
-                modifier = Modifier.clickable(enabled = updateState == UpdateState.Idle) {
-                    updater.checkManually()
-                },
-            )
-            ListItem(
-                headlineContent = { Text("液态玻璃") },
-                supportingContent = { Text("顶栏、筛选栏、分类抽屉、对话框和菜单用玻璃效果（安卓 13 起有折射，12 起有模糊）") },
-                trailingContent = {
-                    Switch(checked = glassEnabled, onCheckedChange = GlassSettings::setEnabled)
-                },
-                modifier = Modifier.clickable { GlassSettings.setEnabled(!glassEnabled) },
-            )
-            // The glass of the drawer, the dialogs and the menus, set like in EhViewer.
-            AnimatedVisibility(visible = glassEnabled) {
-                Column {
-                    val sheetBlur by GlassSettings.sheetBlur.collectAsStateWithLifecycle()
-                    val sheetTint by GlassSettings.sheetTint.collectAsStateWithLifecycle()
-                    val sheetFringe by GlassSettings.sheetFringe.collectAsStateWithLifecycle()
-                    GlassSliderItem(
-                        title = "侧边栏、对话框和菜单的模糊度",
-                        summary = "数值除以 10 是模糊半径（dp）：0 不模糊，默认 ${GlassSettings.DEFAULT_SHEET_BLUR}。模糊需要安卓 12 以上",
-                        value = sheetBlur,
-                        onValueChange = GlassSettings::setSheetBlur,
-                    )
-                    GlassSliderItem(
-                        title = "侧边栏、对话框和菜单的不透明度",
-                        summary = "玻璃上底色的百分比：越大越不透明、越容易看清文字，默认 ${GlassSettings.DEFAULT_SHEET_TINT}",
-                        value = sheetTint,
-                        onValueChange = GlassSettings::setSheetTint,
-                    )
-                    GlassSliderItem(
-                        title = "侧边栏、对话框和菜单的边缘色差",
-                        summary = "玻璃边缘红绿蓝分开的程度，像真实的玻璃边：0 关闭，默认 ${GlassSettings.DEFAULT_SHEET_FRINGE}。需要安卓 13 以上",
-                        value = sheetFringe,
-                        onValueChange = GlassSettings::setSheetFringe,
-                    )
                 }
             }
-            ListItem(
-                headlineContent = { Text("游戏成就扫描") },
-                supportingContent = { Text("自动识别游戏成就页，把完成状态同步到 stardb") },
-                modifier = Modifier.clickable(onClick = onOpenScan),
-            )
+            scanSection(scan)
         }
     }
 }
+
+/** The settings items above 游戏成就扫描: version, update, glass, the glass sliders. */
+private const val ItemsBeforeScan = 4
 
 /** A 0–100 setting in steps of 5, like the glass sliders of EhViewer. */
 @Composable

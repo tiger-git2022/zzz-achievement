@@ -175,14 +175,11 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoo
     val lifecycleOwner = LocalLifecycleOwner.current
     var selectedAchievement by remember { mutableStateOf<AchievementUiModel?>(null) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
-    var showScan by rememberSaveable { mutableStateOf(false) }
+    // The scan overlay's 查看 opens the settings page at 游戏成就扫描.
     val openScanRequested by scanCoordinator.openScanScreen.collectAsStateWithLifecycle()
 
     LaunchedEffect(openScanRequested) {
-        if (openScanRequested) {
-            showScan = true
-            scanCoordinator.consumeOpenScanScreen()
-        }
+        if (openScanRequested) showSettings = true
     }
 
     DisposableEffect(lifecycleOwner, viewModel) {
@@ -203,13 +200,14 @@ fun AchievementApp(viewModel: AchievementViewModel, updater: AppUpdater, scanCoo
 
     UpdateDialogs(updater)
 
-    if (showScan) {
-        ScanScreen(coordinator = scanCoordinator, onBack = { showScan = false })
-        return
-    }
-
     if (showSettings) {
-        SettingsScreen(updater = updater, onBack = { showSettings = false }, onOpenScan = { showScan = true })
+        SettingsScreen(
+            updater = updater,
+            scanCoordinator = scanCoordinator,
+            onBack = { showSettings = false },
+            scrollToScan = openScanRequested,
+            onScrolledToScan = scanCoordinator::consumeOpenScanScreen,
+        )
         return
     }
 

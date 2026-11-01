@@ -86,7 +86,7 @@ object QuickSync {
         notFound: List<String> = emptyList(),
     ): ScanReport {
         val base = ScanReportBuilder.build(reads.flatMap { it.rows }, candidates, gameCompletedCount)
-        val matcher = AchievementMatcher(candidates)
+        val matcher = AchievementMatcher(ScanReportBuilder.onPage(candidates))
         val byId = candidates.associateBy { it.id }
         val open = openAchievements(candidates).filter { it.id in baseline.inProgressIds }
 
@@ -107,12 +107,11 @@ object QuickSync {
                 .forEach { candidate ->
                     doneKeys += candidate.countKey
                     if (candidate.group.isNotBlank()) doneGroups += candidate.group
-                    inferred += ScanDiff(
-                        id = candidate.id,
-                        name = candidate.name,
-                        category = candidate.category,
+                    inferred += ScanDiff.of(
+                        candidate,
                         markCompleted = true,
                         gameStatus = "不在未完成列表里",
+                        namesakes = namesakesOf(candidate, candidates),
                         inferred = true,
                         uncertain = unmatchedOpenRows > 0 || candidate.group.isNotBlank(),
                     )
@@ -172,6 +171,17 @@ object QuickSync {
         before: List<ScanCandidate>,
         after: List<ScanCandidate>,
     ): QuickSyncBaseline = baseline.copy(offset = baseline.offset - (localCompleted(after) - localCompleted(before)))
+
+    /**
+     * The baseline once rows a scan couldn't match were matched to a refreshed local list. The local completed count
+     * the baseline was taken against didn't include those achievements; the ones stardb has completed count now, so
+     * the gap moves by them, as when a change is applied. Ones the game listed as unfinished join
+     * [QuickSyncBaseline.inProgressIds].
+     */
+    fun baselineAfterRematch(baseline: QuickSyncBaseline, rematch: Rematch): QuickSyncBaseline = QuickSyncBaseline(
+        offset = baseline.offset - rematch.completedLocally,
+        inProgressIds = baseline.inProgressIds + rematch.inProgressIds,
+    )
 
     /** Achievements on the page that can still be completed: not done, and no other branch of their group done. */
     private fun openAchievements(candidates: List<ScanCandidate>): List<ScanCandidate> {

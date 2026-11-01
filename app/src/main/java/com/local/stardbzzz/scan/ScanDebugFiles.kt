@@ -91,7 +91,12 @@ object ScanDebugFiles {
         appendLine()
         appendLine("## 差异（${report.diffs.size}）")
         report.diffs.forEach { diff ->
-            appendLine(listOf(if (diff.markCompleted) "标记完成" else "取消完成", diff.category, diff.name, diff.gameStatus, diff.id).joinToString("\t"))
+            appendLine(
+                listOf(
+                    if (diff.markCompleted) "标记完成" else "取消完成", diff.category, diff.name, diff.gameStatus, diff.id,
+                    diff.description, diff.namesakes.joinToString("、").let { if (it.isEmpty()) "" else "同名：$it" },
+                ).joinToString("\t", transform = ::clean).trimEnd(),
+            )
         }
         appendLine()
         appendLine("## 未匹配（${report.unmatched.size}）")
@@ -100,7 +105,9 @@ object ScanDebugFiles {
         }
         appendLine()
         appendLine("## 本地已完成但本次没看到（${report.localCompletedNotSeen.size}）")
-        report.localCompletedNotSeen.forEach { appendLine(listOf(it.category, it.name, it.id).joinToString("\t", transform = ::clean)) }
+        report.localCompletedNotSeen.forEach {
+            appendLine(listOf(it.category, it.name, it.id, it.version, it.description).joinToString("\t", transform = ::clean).trimEnd())
+        }
     }
 
     private fun statusText(status: RowStatus): String = when (status) {

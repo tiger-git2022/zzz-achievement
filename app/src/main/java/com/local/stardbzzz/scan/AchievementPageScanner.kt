@@ -1,5 +1,7 @@
 package com.local.stardbzzz.scan
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.coroutineScope
@@ -76,7 +78,9 @@ class MissingTabsException(tabs: Collection<String>) :
  *
  * Only what steers the walk is read on the way: the whole first page (tabs and 完成数) and the sidebar. Whether a
  * list moved is told from a thumbnail of it, and each new list page is queued and read by OCR alongside the walk,
- * so the game is released as soon as the last page is captured instead of after the last page is read.
+ * so the game is released as soon as the last page is captured instead of after the last page is read. A thumbnail
+ * that says the list didn't move is checked against the rows' names, though: pages of near-identical rows (same
+ * medal, same date, descriptions differing by one word) look alike to it.
  */
 class AchievementPageScanner(
     private val source: ScreenSource,
@@ -84,7 +88,13 @@ class AchievementPageScanner(
     private val timings: ScanTimings = ScanTimings(),
     private val onProgress: (ScanProgress) -> Unit = {},
 ) {
-    private class QueuedPage(val frame: KeptFrame, val tab: String, val category: String)
+    /** A list page waiting for OCR; [names] gets its rows' names once read. */
+    private class QueuedPage(
+        val frame: KeptFrame,
+        val tab: String,
+        val category: String,
+        val names: CompletableDeferred<List<String>> = CompletableDeferred(),
+    )
 
     /** A capture with the thumbnails the walk compares. */
     private class Shot(val frame: ScreenFrame, val list: Thumbnail, val tabBar: Thumbnail)
@@ -111,7 +121,13 @@ class AchievementPageScanner(
         val queue = Channel<QueuedPage>(Channel.UNLIMITED)
         val reader = launch {
             for (page in queue) {
-                val parsed = GameScreenParser.parse(page.frame.read())
+                val parsed = try {
+                    GameScreenParser.parse(page.frame.read())
+                } catch (failure: Throwable) {
+                    page.names.completeExceptionally(failure)
+                    throw failure
+                }
+                page.names.complete(parsed.rows.map { it.name })
                 synchronized(lock) {
                     parsed.rows.forEach { row ->
                         rows += ObservedRow(page.tab, page.category, row.name, row.description, row.status)
@@ -249,7 +265,7 @@ class AchievementPageScanner(
                 complete = true
                 break
             }
-            val next = nextPage(page)
+            val next = nextPage(page, parsed.rows.map { it.name })
             if (next == null) {
                 complete = true
                 break
@@ -262,11 +278,11 @@ class AchievementPageScanner(
     }
 
     /** Swipes one page on; null at the list's end. A swipe the game dropped is retried once. */
-    private suspend fun nextPage(page: Shot): Shot? {
+    private suspend fun nextPage(page: Shot, pageNames: List<String>): Shot? {
         repeat(StableReads) {
             input.swipe(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, timings.holdMillis)
             val next = settle()
-            if (!unchangedList(page, next)) return next
+            if (!unchangedList(page, next) || !sameRows(pageNames, next)) return next
         }
         return null
     }
@@ -349,20 +365,21 @@ class AchievementPageScanner(
         var page = rewindList()
         collecting = true
         report()
-        enqueue(page, tab, category, queue)
+        var pageNames = enqueue(page, tab, category, queue)
         var unchanged = 0
         for (step in 1 until MaxPagesPerCategory) {
             input.swipe(ListSwipeFrom, ListSwipeTo, timings.swipeMillis, timings.holdMillis)
             val next = settle()
             // A page that didn't move holds nothing new; requiring it twice keeps one swipe the game dropped
-            // from ending the list early.
-            if (unchangedList(page, next)) {
+            // from ending the list early. The thumbnail alone once took a page of look-alike rows for the same
+            // page and skipped three achievements, so its "didn't move" is checked against the names.
+            if (unchangedList(page, next) && sameRows(pageNames.await(), next)) {
                 if (++unchanged >= StableReads) break
                 continue
             }
             unchanged = 0
             page = next
-            enqueue(page, tab, category, queue)
+            pageNames = enqueue(page, tab, category, queue)
         }
         collecting = false
         report()
@@ -385,14 +402,23 @@ class AchievementPageScanner(
         return page
     }
 
-    private suspend fun enqueue(shot: Shot, tab: String, category: String, queue: SendChannel<QueuedPage>) {
-        val kept = shot.frame.keep(RowsRegion)
+    /** Queues a page for OCR; the result gets its rows' names once the page is read. */
+    private suspend fun enqueue(shot: Shot, tab: String, category: String, queue: SendChannel<QueuedPage>): Deferred<List<String>> {
+        val page = QueuedPage(shot.frame.keep(RowsRegion), tab, category)
         synchronized(lock) { queued++ }
-        queue.send(QueuedPage(kept, tab, category))
+        queue.send(page)
         report()
+        return page.names
     }
 
     private fun unchangedList(a: Shot, b: Shot): Boolean = a.list.difference(b.list) < ListUnchanged
+
+    /**
+     * Whether [shot] (the current capture) shows the rows named [names]: a read of its rows, compared name by name.
+     * Only asked when the thumbnails already look alike, i.e. at a list's end or after a swipe the game dropped.
+     */
+    private suspend fun sameRows(names: List<String>, shot: Shot): Boolean =
+        sameContent(names, GameScreenParser.parse(shot.frame.read(RowsRegion)).rows.map { it.name })
 
     /** Waits for the screen to stop moving (a fling, a list swapped in) and returns its capture. */
     private suspend fun settle(): Shot {

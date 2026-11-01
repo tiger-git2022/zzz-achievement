@@ -26,6 +26,12 @@ data class ScanCandidate(
     /** Listed on the in-game achievement page, and so counted by its 完成数. */
     val onAchievementPage: Boolean get() = tab in GameScreenParser.TabNames
 
+    /** Known to be elsewhere (the arcade games under 其他), so a scan of the achievement page never sees it. */
+    val offAchievementPage: Boolean get() = tab.isNotBlank() && !onAchievementPage
+
+    /** Where the game lists it, e.g. 探索 / 空洞探索指南. */
+    val place: String get() = listOf(tab, category).filter { it.isNotBlank() }.joinToString(" / ")
+
     val linkKey: LinkKey get() = LinkKey(name, category, version, AchievementMatcher.normalizeText(description))
 
     /** What counts as one achievement: its group of story branches, or the records listing it. */
@@ -54,7 +60,49 @@ data class ScanDiff(
     val inferred: Boolean = false,
     /** Not selected by default: the inference could be wrong (see [QuickSyncSummary]). */
     val uncertain: Boolean = false,
-)
+    val tab: String = "",
+    /** The local achievement's description, to tell it apart from a namesake. */
+    val description: String = "",
+    val version: String = "",
+    /** Other local achievements with the same name, as 页签 / 分类: one of them may be the one checked by mistake. */
+    val namesakes: List<String> = emptyList(),
+) {
+    val place: String get() = listOf(tab, category).filter { it.isNotBlank() }.joinToString(" / ")
+
+    companion object {
+        fun of(
+            candidate: ScanCandidate,
+            markCompleted: Boolean,
+            gameStatus: String,
+            namesakes: List<String> = emptyList(),
+            inferred: Boolean = false,
+            uncertain: Boolean = false,
+        ) = ScanDiff(
+            id = candidate.id,
+            name = candidate.name,
+            category = candidate.category,
+            markCompleted = markCompleted,
+            gameStatus = gameStatus,
+            inferred = inferred,
+            uncertain = uncertain,
+            tab = candidate.tab,
+            description = candidate.description,
+            version = candidate.version,
+            namesakes = namesakes,
+        )
+    }
+}
+
+/** Where else a name is used: other achievements (not linked records of this one) sharing [candidate]'s name. */
+fun namesakesOf(candidate: ScanCandidate, all: List<ScanCandidate>): List<String> {
+    val names = AchievementMatcher.nameVariants(candidate.name).map(AchievementMatcher::normalizeText).toSet()
+    return all.asSequence()
+        .filter { it.linkKey != candidate.linkKey }
+        .filter { other -> AchievementMatcher.nameVariants(other.name).any { AchievementMatcher.normalizeText(it) in names } }
+        .map { other -> other.place + if (other.isCompleted) "（本地已完成）" else "" }
+        .distinct()
+        .toList()
+}
 
 data class ScanReport(
     /** The game's own 完成数 counter. */
@@ -77,11 +125,42 @@ data class ScanReport(
     val inProgressIds: Set<String> = emptySet(),
     /** Set for a 快速同步, which reads only part of the page. */
     val quick: QuickSyncSummary? = null,
+    /** Unmatched rows matched later, after the local list was refreshed. */
+    val rematched: Int = 0,
+    /** Completed arcade-game achievements (其他), left out of every count above: the scan doesn't look at them. */
+    val arcadeCompleted: Int = 0,
 ) {
     /** The local completed count if every diff were applied. */
     val localCompletedAfterSync: Int
         get() = localCompletedCount + diffs.count { it.markCompleted } - diffs.count { !it.markCompleted }
+
+    /** This report with rows matched after a refresh of the local list folded in. */
+    fun withRematch(rematch: Rematch): ScanReport {
+        if (rematch.matched == 0) return this
+        val known = diffs.map { it.id }.toSet()
+        return copy(
+            matchedCount = matchedCount + rematch.matched,
+            unmatched = rematch.stillUnmatched,
+            diffs = (diffs + rematch.diffs.filter { it.id !in known }).sortedByDescending { it.markCompleted },
+            inProgressIds = inProgressIds + rematch.inProgressIds,
+            rematched = rematched + rematch.matched,
+        )
+    }
 }
+
+/** See [ScanReportBuilder.rematch]. */
+data class Rematch(
+    val stillUnmatched: List<ObservedRow>,
+    val matched: Int,
+    val diffs: List<ScanDiff>,
+    /** Newly matched achievements the game listed as unfinished: they join the 快速同步 baseline. */
+    val inProgressIds: Set<String>,
+    /**
+     * Newly matched achievements stardb already has completed. The scan's local count didn't include them (they
+     * weren't in the list yet); it does now.
+     */
+    val completedLocally: Int = 0,
+)
 
 /**
  * Fuzzy-matches OCR'd achievement names to local achievements.
@@ -304,9 +383,11 @@ class AchievementMatcher(private val candidates: List<ScanCandidate>) {
 object ScanReportBuilder {
     fun build(
         observed: List<ObservedRow>,
-        candidates: List<ScanCandidate>,
+        allCandidates: List<ScanCandidate>,
         gameCompletedCount: Int?,
     ): ScanReport {
+        // The arcade games' achievements aren't on the achievement page: not matched, counted or missed.
+        val candidates = onPage(allCandidates)
         val matcher = AchievementMatcher(candidates)
         // The same row is usually captured on two consecutive pages. Match every reading first and merge by
         // the matched achievement, so same-name achievements told apart by description stay separate.
@@ -341,13 +422,7 @@ object ScanReportBuilder {
             // as done.
             if (completedInGame && candidate.group in doneGroups) return@mapNotNull null
             if (completedInGame && candidate.group.isNotBlank()) doneGroups += candidate.group
-            ScanDiff(
-                id = candidate.id,
-                name = candidate.name,
-                category = candidate.category,
-                markCompleted = completedInGame,
-                gameStatus = row.status.label(),
-            )
+            ScanDiff.of(candidate, completedInGame, row.status.label(), namesakesOf(candidate, allCandidates))
         }
 
         // A row cut off at the list's edge can read as the tail (or head) of its name, e.g. 位主人的使命; it was
@@ -369,7 +444,8 @@ object ScanReportBuilder {
             gameCompletedCount = gameCompletedCount,
             gameCompletedSeen = completedSeen,
             localCompletedCount = completedAchievements(candidates),
-            localCompletedRecords = candidates.count { it.isCompleted },
+            localCompletedRecords = completedRecords(candidates),
+            arcadeCompleted = arcadeCompleted(allCandidates),
             observedCount = statusById.size + unmatchedRows.size,
             matchedCount = statusById.size,
             unmatched = unmatchedRows,
@@ -419,11 +495,53 @@ object ScanReportBuilder {
     /** OCR of one description varies by a character or two between frames; different achievements differ more. */
     private const val SameDescription = 0.7
 
-    /** Completed achievements, counting records that list the same achievement, or branches of one group, once. */
+    /**
+     * Completed achievements on the achievement page, counting records that list the same achievement, or branches
+     * of one group, once.
+     */
     fun completedAchievements(candidates: List<ScanCandidate>): Int =
-        candidates.filter { it.isCompleted }.map { it.countKey }.distinct().size
+        onPage(candidates).filter { it.isCompleted }.map { it.countKey }.distinct().size
 
-    private fun RowStatus.label(): String = when (this) {
+    /** Completed achievements of the arcade games, which the scan leaves out. */
+    fun arcadeCompleted(candidates: List<ScanCandidate>): Int =
+        candidates.filter { it.offAchievementPage && it.isCompleted }.map { it.countKey }.distinct().size
+
+    /** Completed records on the achievement page. */
+    fun completedRecords(candidates: List<ScanCandidate>): Int = onPage(candidates).count { it.isCompleted }
+
+    /**
+     * Rows a scan couldn't match, matched again against a newer local list: stardb has added the achievements
+     * since. A row now matched gives a diff when the game and the local state differ, as in a scan.
+     */
+    fun rematch(rows: List<ObservedRow>, allCandidates: List<ScanCandidate>): Rematch {
+        val candidates = onPage(allCandidates)
+        val matcher = AchievementMatcher(candidates)
+        val doneGroups = candidates.filter { it.isCompleted && it.group.isNotBlank() }.map { it.group }.toSet()
+        val still = mutableListOf<ObservedRow>()
+        val matched = linkedMapOf<String, Pair<ScanCandidate, ObservedRow>>()
+        rows.forEach { row ->
+            val candidate = matcher.match(row.name, row.description, row.category)
+            if (candidate == null) still += row else matched.putIfAbsent(candidate.id, candidate to row)
+        }
+        val diffs = matched.values.mapNotNull { (candidate, row) ->
+            val completedInGame = row.status is RowStatus.Completed
+            if (completedInGame == candidate.isCompleted) return@mapNotNull null
+            if (completedInGame && candidate.group in doneGroups) return@mapNotNull null
+            ScanDiff.of(candidate, completedInGame, row.status.label(), namesakesOf(candidate, allCandidates))
+        }
+        return Rematch(
+            stillUnmatched = still,
+            matched = matched.size,
+            diffs = diffs,
+            completedLocally = matched.values.map { it.first }.filter { it.isCompleted }.map { it.countKey }.distinct().size,
+            inProgressIds = matched.values.filter { it.second.status is RowStatus.InProgress }.map { it.first.id }.toSet(),
+        )
+    }
+
+    /** Candidates a scan of the achievement page can see: without the arcade games. */
+    fun onPage(candidates: List<ScanCandidate>): List<ScanCandidate> = candidates.filterNot { it.offAchievementPage }
+
+    fun RowStatus.label(): String = when (this) {
         is RowStatus.Completed -> date?.let { "已完成（$it）" } ?: "已完成"
         is RowStatus.InProgress -> "进行中 $current/$target"
     }

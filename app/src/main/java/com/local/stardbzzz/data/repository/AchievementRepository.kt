@@ -41,6 +41,9 @@ data class AchievementUiModel(
 data class AchievementListInfo(
     val total: Int,
     val completed: Int,
+    /** On the in-game achievement page, without the arcade games. */
+    val pageTotal: Int,
+    val pageCompleted: Int,
     val latestVersion: String?,
     val refreshedAtEpochMillis: Long,
     val completedViaGroup: Int,
@@ -222,12 +225,21 @@ class AchievementRepository(
     }
 
     /** What the scan compares against: how big and how fresh the local achievement list is. */
-    suspend fun achievementListInfo(): AchievementListInfo {
-        val all = dao.allSnapshot()
-        val preferences = filterPreferences.state.first()
+    suspend fun achievementListInfo(): AchievementListInfo =
+        listInfoOf(dao.allSnapshot(), filterPreferences.state.first())
+
+    /** [achievementListInfo], kept current as the list is refreshed or edited elsewhere in the app. */
+    fun observeAchievementListInfo(): Flow<AchievementListInfo> =
+        combine(dao.observeAll(), filterPreferences.state, ::listInfoOf)
+
+    private fun listInfoOf(all: List<AchievementEntity>, preferences: FilterState): AchievementListInfo {
+        // The arcade games (其他) have achievements of their own, outside the in-game achievement page.
+        val onPage = all.filter { it.primaryCategory != "其他" }
         return AchievementListInfo(
             total = all.map { it.countKey }.distinct().size,
             completed = all.filter { it.isCompleted }.map { it.countKey }.distinct().size,
+            pageTotal = onPage.map { it.countKey }.distinct().size,
+            pageCompleted = onPage.filter { it.isCompleted }.map { it.countKey }.distinct().size,
             latestVersion = all.map { it.version }
                 .filter { it.isNotBlank() }
                 .maxByOrNull { it.removePrefix("V").removePrefix("v").toFloatOrNull() ?: 0f },

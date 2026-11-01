@@ -103,6 +103,23 @@ class AchievementPageScannerTest {
     }
 
     @Test
+    fun pagesOfLookAlikeRowsAreNotTakenForTheSamePage() = runBlocking {
+        // On the phone a page of 鸣徽 rows (same medal, same date, descriptions one word apart) had a thumbnail so
+        // close to the page before that the list passed for unmoved: that page was dropped and three rows lost.
+        val names = rows("枯萎之都", 14)
+        val game = FakeGame(
+            GameScreenParser.TabNames.associateWith { tab -> listOf("${tab}分类" to if (tab == "战术") names else rows(tab, 4)) },
+            lookAlike = names.drop(2).toSet(),
+        )
+
+        val capture = AchievementPageScanner(game, game, ScanTimings.None).scan()
+
+        assertEquals(names.toSet(), capture.rows.filter { it.tab == "战术" }.map { it.name }.toSet())
+        // Still ends each list: two swipes that change nothing, confirmed by name.
+        assertTrue("swipes: ${game.swipes}", game.swipes < 4 * 12)
+    }
+
+    @Test
     fun misreadSidebarLabelIsNotVisitedTwice() = runBlocking {
         // 代理人秘闻 was read as 代理人秘圓 on some frames; that must not count as a new category.
         val game = FakeGame(
@@ -327,6 +344,8 @@ class AchievementPageScannerTest {
         private val leaveAfterSwipes: Int? = null,
         /** Rows shown unfinished (01/03) instead of with a date. */
         private val unfinished: Set<String> = emptySet(),
+        /** Rows whose pixels look the same as each other: only OCR tells them apart. */
+        private val lookAlike: Set<String> = emptySet(),
     ) : ScreenSource, GestureInput {
         var swipes = 0
             private set
@@ -410,11 +429,12 @@ class AchievementPageScannerTest {
                 val label = if (garble && jitterSidebar && captures % 2 == 0) name.dropLast(1) + "圓" else name
                 boxes += OcrBox(label, 0.11f, y - 0.015f, 0.18f, y + 0.015f)
             }
-            rowsInCategory.drop(listOffset).take(VisibleRows).forEachIndexed { index, name ->
+            rowsInCategory.drop(listOffset).take(VisibleRows).forEachIndexed { index, row ->
                 val y = 0.30f + index * 0.136f
+                val name = if (!garble && row in lookAlike) "同款" else row
                 boxes += OcrBox(if (garble) jitter(name) else name, 0.29f, y - 0.032f, 0.40f, y - 0.005f)
                 boxes += OcrBox("描述$name", 0.29f, y + 0.003f, 0.45f, y + 0.028f)
-                boxes += OcrBox(if (name in unfinished) "01/03" else "2026年1月1日", 0.81f, y - 0.016f, 0.90f, y + 0.016f)
+                boxes += OcrBox(if (row in unfinished) "01/03" else "2026年1月1日", 0.81f, y - 0.016f, 0.90f, y + 0.016f)
             }
             return boxes
         }

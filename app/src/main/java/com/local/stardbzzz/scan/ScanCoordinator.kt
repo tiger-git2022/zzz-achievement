@@ -10,11 +10,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -62,6 +67,16 @@ class ScanCoordinator(
 
     private val _lastReport = MutableStateFlow<ScanReport?>(null)
     val lastReport: StateFlow<ScanReport?> = _lastReport.asStateFlow()
+
+    /**
+     * Diffs from rows an earlier scan couldn't match and a refreshed local list now matches, when that scan's
+     * report is gone (the app was restarted); with the report still here they are folded into it instead.
+     */
+    private val _laterMatches = MutableStateFlow<List<ScanDiff>>(emptyList())
+    val laterMatches: StateFlow<List<ScanDiff>> = _laterMatches.asStateFlow()
+
+    /** Unmatched rows saved across scans and restarts are matched again one refresh at a time. */
+    private val rematchMutex = Mutex()
 
     private val _openScanScreen = MutableStateFlow(false)
     val openScanScreen: StateFlow<Boolean> = _openScanScreen.asStateFlow()
@@ -122,6 +137,7 @@ class ScanCoordinator(
         if (job?.isActive == true) return
         // A report from an earlier run must not be applied as if it came from this one.
         _lastReport.value = null
+        _laterMatches.value = emptyList()
         _state.value = ScanState.Running(ScanProgress(null, null, 0, 0))
         job = scope.launch {
             var recognizer: PaddleTextRecognizer? = null
@@ -158,6 +174,8 @@ class ScanCoordinator(
                     }
                     ScanMode.Quick -> quickSync(scanner, candidates)
                 }
+                // A full scan saw every row; a 快速同步 only some, so it adds to the rows kept from before.
+                saveUnmatched(if (mode == ScanMode.Full) report.unmatched else mergeRows(loadUnmatched(), report.unmatched))
                 debug?.writeReport(report, listInfo)
                 _lastReport.value = report
                 _state.value = ScanState.Finished(report)
@@ -187,6 +205,8 @@ class ScanCoordinator(
     }
 
     private suspend fun quickSync(scanner: AchievementPageScanner, candidates: List<ScanCandidate>): ScanReport {
+        // The list may have been refreshed from the main screen since: the baseline must have caught up with it.
+        rematchUnmatched()
         val baseline = quickStore.load() ?: error("快速同步要先做一次全盘扫描，作为对比的基准")
         var expected = 0
         var planned = 0
@@ -241,9 +261,86 @@ class ScanCoordinator(
 
     suspend fun achievementListInfo(): AchievementListInfo = repository.achievementListInfo()
 
+    fun observeAchievementListInfo(): Flow<AchievementListInfo> = repository.observeAchievementListInfo()
+
+    /**
+     * Matches the rows scans couldn't match against the local list as it is now: stardb may have added those
+     * achievements since. Called whenever the list was refreshed. A row now matched leaves the unmatched list;
+     * one the game showed completed but stardb doesn't becomes a diff to confirm, as in a scan.
+     */
+    suspend fun rematchUnmatched() = rematchMutex.withLock {
+        val rows = loadUnmatched()
+        if (rows.isEmpty()) return@withLock
+        val candidates = repository.scanCandidates()
+        val rematch = ScanReportBuilder.rematch(rows, candidates)
+        if (rematch.matched == 0) return@withLock
+        saveUnmatched(rematch.stillUnmatched)
+        quickStore.load()?.let { saveBaseline(QuickSync.baselineAfterRematch(it, rematch)) }
+        val report = _lastReport.value
+        if (report != null) {
+            val updated = report.withRematch(rematch)
+            _lastReport.value = updated
+            _state.update { current -> if (current is ScanState.Finished) ScanState.Finished(updated) else current }
+        } else {
+            _laterMatches.update { current ->
+                val known = current.map { it.id }.toSet()
+                current + rematch.diffs.filter { it.id !in known }
+            }
+        }
+    }
+
+    /** The unmatched rows of the last scans, as JSON in the scan preferences. */
+    private fun loadUnmatched(): List<ObservedRow> {
+        val json = prefs.getString(KeyUnmatched, null) ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(json)
+            (0 until array.length()).map { i ->
+                val row = array.getJSONObject(i)
+                ObservedRow(
+                    tab = row.optString("tab"),
+                    category = row.optString("category"),
+                    name = row.optString("name"),
+                    description = row.optString("description"),
+                    status = if (row.optBoolean("done")) {
+                        RowStatus.Completed(row.optString("date").ifBlank { null })
+                    } else {
+                        RowStatus.InProgress(row.optLong("current"), row.optLong("target"))
+                    },
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveUnmatched(rows: List<ObservedRow>) {
+        val array = JSONArray()
+        rows.forEach { row ->
+            val status = row.status
+            array.put(
+                JSONObject()
+                    .put("tab", row.tab)
+                    .put("category", row.category)
+                    .put("name", row.name)
+                    .put("description", row.description)
+                    .put("done", status is RowStatus.Completed)
+                    .put("date", (status as? RowStatus.Completed)?.date.orEmpty())
+                    .put("current", (status as? RowStatus.InProgress)?.current ?: 0L)
+                    .put("target", (status as? RowStatus.InProgress)?.target ?: 0L),
+            )
+        }
+        prefs.edit().putString(KeyUnmatched, array.toString()).apply()
+    }
+
+    /** Newer reads replace older ones of the same row (same tab, category and name). */
+    private fun mergeRows(old: List<ObservedRow>, new: List<ObservedRow>): List<ObservedRow> {
+        fun key(row: ObservedRow) = Triple(row.tab, AchievementMatcher.normalizeText(row.category), AchievementMatcher.normalizeText(row.name))
+        val newKeys = new.map(::key).toSet()
+        return old.filter { key(it) !in newKeys } + new
+    }
+
     /** Re-downloads the achievement list from stardb, so newly added achievements can be matched. */
     suspend fun refreshAchievementList() {
         repository.refreshAchievements()
+        rematchUnmatched()
     }
 
     fun requestOpenScanScreen() {
@@ -266,10 +363,12 @@ class ScanCoordinator(
         // One diff can update several linked records, so recount instead of adjusting by the diff count.
         val candidates = repository.scanCandidates()
         quickStore.load()?.let { saveBaseline(QuickSync.baselineAfterApply(it, before, candidates)) }
+        _laterMatches.update { current -> current.filterNot { it.id in applied } }
         val updated = _lastReport.value?.let { report ->
             report.copy(
                 localCompletedCount = ScanReportBuilder.completedAchievements(candidates),
-                localCompletedRecords = candidates.count { it.isCompleted },
+                localCompletedRecords = ScanReportBuilder.completedRecords(candidates),
+                arcadeCompleted = ScanReportBuilder.arcadeCompleted(candidates),
                 localCompletedNotSeen = report.localCompletedNotSeen.filter { notSeen ->
                     candidates.any { it.countKey == notSeen.countKey && it.isCompleted }
                 },
@@ -367,6 +466,7 @@ class ScanCoordinator(
         const val KeySaveDebugFrames = "save_debug_frames"
         const val KeyQuickOffset = "quick_offset"
         const val KeyQuickInProgress = "quick_in_progress"
+        const val KeyUnmatched = "unmatched_rows"
         const val OcrMaxWidth = 3200
         const val MaxDebugFrames = 1500
         const val OverlaySettleMillis = 600L

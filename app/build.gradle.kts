@@ -4,9 +4,14 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-// CI passes BUILD_NUMBER (GITHUB_RUN_NUMBER); local builds fall back to 0.
-val buildNumber = System.getenv("BUILD_NUMBER")?.toIntOrNull() ?: 0
-val baseVersionName = "1.1"
+// MAJOR.MINOR: raise the minor for a new feature, the major for a big change. CI passes VERSION_NAME = X.Y.Z
+// (Z counts the releases of X.Y, see .github/workflows/release.yml); local builds stay at X.Y with versionCode 2.
+val baseVersionName = "2.1"
+val ciVersionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() }
+val ciVersionParts = ciVersionName?.let { name ->
+    Regex("""(\d{1,2})\.(\d{1,3})\.(\d{1,4})""").matchEntire(name)?.groupValues?.drop(1)?.map(String::toInt)
+        ?: error("VERSION_NAME must be X.Y.Z, not $name")
+}
 
 // Release signing comes from the environment (see .github/workflows/release.yml).
 // Without it, release builds are signed with the debug key so local builds keep working.
@@ -27,10 +32,9 @@ android {
         applicationId = "com.local.stardbzzz"
         minSdk = 26
         targetSdk = 35
-        // Offset keeps CI builds above the hand-set versionCode 2 used before CI existed.
-        versionCode = if (buildNumber > 0) 100 + buildNumber else 2
-        versionName = if (buildNumber > 0) "$baseVersionName.$buildNumber" else baseVersionName
-        buildConfigField("int", "BUILD_NUMBER", buildNumber.toString())
+        // Above the earlier CI builds (100 + run number) and the hand-set 2 of local builds.
+        versionCode = ciVersionParts?.let { (major, minor, patch) -> major * 10_000_000 + minor * 10_000 + patch } ?: 2
+        versionName = ciVersionName ?: baseVersionName
 
         // The OCR runtime (ONNX Runtime) is ~20 MB of native code per ABI; 64-bit ARM covers current phones.
         ndk { abiFilters += "arm64-v8a" }

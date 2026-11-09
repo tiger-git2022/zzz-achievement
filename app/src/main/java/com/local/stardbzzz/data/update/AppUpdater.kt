@@ -32,7 +32,6 @@ import java.util.concurrent.TimeUnit
 
 data class ReleaseInfo(
     val tagName: String,
-    val buildNumber: Int,
     val notes: String,
     val apkUrl: String,
     val apkSize: Long,
@@ -49,7 +48,7 @@ sealed interface UpdateState {
 
 /**
  * Checks GitHub Releases for a newer CI build and downloads its APK.
- * Builds are compared by the trailing number of the tag (v1.1.<build>) against BuildConfig.BUILD_NUMBER.
+ * Builds are compared by the tag's version (vX.Y.Z, see AppVersion) against BuildConfig.VERSION_NAME.
  */
 class AppUpdater(context: Context) {
     private val appContext = context.applicationContext
@@ -82,8 +81,8 @@ class AppUpdater(context: Context) {
 
         scope.launch {
             val release = runCatching { fetchLatestRelease() }.getOrNull() ?: return@launch
-            if (release.buildNumber > BuildConfig.BUILD_NUMBER &&
-                release.buildNumber != prefs.getInt(KeyIgnoredBuild, -1)
+            if (AppVersion.isNewer(release.tagName, BuildConfig.VERSION_NAME) &&
+                release.tagName != prefs.getString(KeyIgnoredTag, null)
             ) {
                 _state.compareAndSet(UpdateState.Idle, UpdateState.Available(release))
             }
@@ -98,7 +97,7 @@ class AppUpdater(context: Context) {
             try {
                 val release = fetchLatestRelease()
                 prefs.edit().putLong(KeyLastCheck, System.currentTimeMillis()).apply()
-                if (release.buildNumber > BuildConfig.BUILD_NUMBER) {
+                if (AppVersion.isNewer(release.tagName, BuildConfig.VERSION_NAME)) {
                     _state.value = UpdateState.Available(release)
                 } else {
                     _state.value = UpdateState.Idle
@@ -118,7 +117,7 @@ class AppUpdater(context: Context) {
     }
 
     fun ignore(release: ReleaseInfo) {
-        prefs.edit().putInt(KeyIgnoredBuild, release.buildNumber).apply()
+        prefs.edit().putString(KeyIgnoredTag, release.tagName).apply()
         _state.value = UpdateState.Idle
     }
 
@@ -216,7 +215,7 @@ class AppUpdater(context: Context) {
 
     private fun parseRelease(json: JSONObject): ReleaseInfo {
         val tagName = json.getString("tag_name")
-        val buildNumber = buildNumberOf(tagName)
+        checkVersion(tagName)
         val assets = json.optJSONArray("assets")
         val apkAsset = (0 until (assets?.length() ?: 0))
             .map { assets!!.getJSONObject(it) }
@@ -225,7 +224,6 @@ class AppUpdater(context: Context) {
         val digest = apkAsset.stringOrEmpty("digest")
         return ReleaseInfo(
             tagName = tagName,
-            buildNumber = buildNumber,
             notes = json.stringOrEmpty("body").trim(),
             apkUrl = apkAsset.getString("browser_download_url"),
             apkSize = apkAsset.optLong("size", -1L),
@@ -307,18 +305,16 @@ class AppUpdater(context: Context) {
         private const val LatestReleaseUrl = "https://api.github.com/repos/tiger-git2022/zzz-achievement/releases/latest"
         private const val AutoCheckIntervalMillis = 24 * 60 * 60 * 1000L
         private const val KeyLastCheck = "last_check_epoch_millis"
-        private const val KeyIgnoredBuild = "ignored_build_number"
-        private val TagPattern = Regex("""v?\d+\.\d+\.(\d+)""")
+        private const val KeyIgnoredTag = "ignored_tag"
 
         /** update.json: {"tag_name", "body", "apk": {"name", "size", "sha256"}}, written by the release workflow. */
         fun parseUpdateManifest(body: String): ReleaseInfo {
             val json = JSONObject(body)
-            val tagName = json.getString("tag_name")
+            val tagName = checkVersion(json.getString("tag_name"))
             val apk = json.getJSONObject("apk")
             val name = apk.getString("name")
             return ReleaseInfo(
                 tagName = tagName,
-                buildNumber = buildNumberOf(tagName),
                 notes = json.optString("body").trim(),
                 apkUrl = "$Repository/releases/download/$tagName/$name",
                 apkSize = apk.optLong("size", -1L),
@@ -326,8 +322,7 @@ class AppUpdater(context: Context) {
             )
         }
 
-        fun buildNumberOf(tagName: String): Int =
-            TagPattern.matchEntire(tagName)?.groupValues?.get(1)?.toIntOrNull()
-                ?: throw IOException("无法识别版本号 $tagName")
+        fun checkVersion(tagName: String): String =
+            tagName.takeIf { AppVersion.parse(it) != null } ?: throw IOException("无法识别版本号 $tagName")
     }
 }

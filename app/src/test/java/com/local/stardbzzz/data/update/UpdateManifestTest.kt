@@ -14,7 +14,6 @@ class UpdateManifestTest {
         val release = AppUpdater.parseUpdateManifest(manifest)
 
         assertEquals("v1.1.36", release.tagName)
-        assertEquals(36, release.buildNumber)
         assertEquals("## 更新内容\n- 修复检查更新 (abc1234)", release.notes)
         assertEquals(
             "https://github.com/tiger-git2022/zzz-achievement/releases/download/v1.1.36/zzz-achievement-v1.1.36.apk",

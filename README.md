@@ -25,9 +25,9 @@
 
 ### 自动构建与更新
 
-- `.github/workflows/release.yml`：每次推送 `main` 或手动触发（Actions → Build & Release → Run workflow）时编译签名的 release APK，并发布到 Releases，tag 为 `v1.1.<构建号>`（构建号 = `GITHUB_RUN_NUMBER`），更新说明为与上一个 tag 之间的 commit 列表。PR 只编译，APK 作为 Actions artifact 上传。
+- `.github/workflows/release.yml`：每次推送 `main` 或手动触发（Actions → Build & Release → Run workflow）时编译签名的 release APK，并发布到 Releases，tag 为 `vX.Y.Z`，更新说明为与上一个 tag 之间的 commit 列表。PR 只编译，APK 作为 Actions artifact 上传。
 - 签名读取仓库 Secrets：`KEYSTORE_BASE64`、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`。`app/build.gradle.kts` 从环境变量 `KEYSTORE_FILE` 等读取，本地没有这些变量时 release 构建使用 debug 签名。
-- 版本号：CI 构建 `versionCode = 100 + 构建号`，`versionName = 1.1.<构建号>`；本地构建保持 `versionCode = 2`、`versionName = 1.1`、构建号 0。
+- 版本号：`app/build.gradle.kts` 的 `baseVersionName` 记 X.Y，加新功能涨 Y，大改涨 X；Z 每次发布自动加一，修 bug 不用改。CI 构建 `versionCode = X*10000000 + Y*10000 + Z`；本地构建是 `versionCode = 2`、`versionName = X.Y`。2026-11 以前的版本是 `v1.1.<构建号>`。
 - App 启动时每天最多自动检查一次 GitHub 最新 Release（失败静默），设置页可手动“检查更新”。下载后通过 FileProvider 调起系统安装；首次需要允许“安装未知应用”。
 - 只有使用同一签名证书的 APK 才能覆盖安装；本地 debug 签名的版本需要先卸载再安装 Release 版本。
 
@@ -89,9 +89,9 @@ Personal native Android app for tracking Zenless Zone Zero achievements, synced 
 
 ### Builds and updates
 
-- `.github/workflows/release.yml` builds a signed release APK on every push to `main` (or a manual run of **Build & Release**) and publishes it as `v1.1.<run number>`, with the commits since the previous tag as release notes. Pull requests only build; the APK is uploaded as an Actions artifact.
+- `.github/workflows/release.yml` builds a signed release APK on every push to `main` (or a manual run of **Build & Release**) and publishes it as `vX.Y.Z`, with the commits since the previous tag as release notes. Pull requests only build; the APK is uploaded as an Actions artifact.
 - Signing reads the repository secrets `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS` and `KEY_PASSWORD`. Without them, local release builds use the debug key.
-- Version: CI builds use `versionCode = 100 + run number` and `versionName = 1.1.<run number>`; local builds keep `versionCode = 2`, `versionName = 1.1`.
+- Version: `baseVersionName` in `app/build.gradle.kts` holds X.Y; a new feature raises Y, a big change X, and Z grows by one with each release, so fixes need no edit. CI builds use `versionCode = X*10000000 + Y*10000 + Z`; local builds keep `versionCode = 2`, `versionName = X.Y`. Releases before November 2026 were `v1.1.<run number>`.
 - The app checks the latest GitHub release at most once a day on launch (silently), and on demand from Settings → 检查更新. Updating downloads the APK and opens the system installer, which needs the "Install unknown apps" permission the first time. Only APKs signed with the same key can update in place.
 
 ### In-game achievement scan

@@ -10,10 +10,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Version scheme: semantic version, tag "vX.Y.Z". baseVersionName in app/build.gradle.kts holds X.Y: a change
+# with a new feature raises Y there, a big change raises X. Z counts the releases of X.Y from 0, so a fix needs
+# no edit. versionCode = X * 10000000 + Y * 10000 + Z (app/build.gradle.kts), above the earlier "v1.1.<run>"
+# releases (versionCode 100 + run). The in-app updater compares versions the same way (data/update/AppVersion.kt).
 env:
-  # Read by app/build.gradle.kts: versionCode = 100 + BUILD_NUMBER, versionName = 1.1.BUILD_NUMBER.
-  BUILD_NUMBER: ${{ github.run_number }}
-  VERSION_NAME: 1.1.${{ github.run_number }}
   IS_RELEASE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
 jobs:
@@ -22,11 +23,43 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skip: ${{ steps.version.outputs.skip }}
 
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0 # tags, for the next version number
           persist-credentials: false
+
+      # Read by app/build.gradle.kts: versionName = VERSION_NAME, versionCode from it.
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          existing=$(git tag --points-at "$GITHUB_SHA" --list 'v*' | head -n 1)
+          if [ "$IS_RELEASE" = "true" ] && [ -n "$existing" ] && [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            echo "Commit ${GITHUB_SHA::7} was already released as $existing, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+          series=$(sed -nE 's/^val baseVersionName = "([0-9]+\.[0-9]+)"$/\1/p' app/build.gradle.kts)
+          if [ -z "$series" ]; then
+            echo "::error::app/build.gradle.kts must have val baseVersionName = \"MAJOR.MINOR\""
+            exit 1
+          fi
+          last=$(git tag --list "v${series}.*" | sed "s/^v${series}\.//" | grep -E '^[0-9]+$' | sort -n | tail -n 1 || true)
+          if [ -n "$last" ]; then patch=$(( last + 1 )); else patch=0; fi
+          version="$series.$patch"
+          # A lower X.Y would publish a release older than the latest one
+          newest=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+          if [ -n "$newest" ] && [ "$(printf '%s\n' "$newest" "v$version" | sort -V | tail -n 1)" != "v$version" ]; then
+            echo "::error::v$version would be older than $newest, raise baseVersionName"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "VERSION_NAME=$version" >> "$GITHUB_ENV"
+          echo "Version v$version"
 
       - uses: actions/setup-java@v4
         with:
@@ -88,10 +121,12 @@ jobs:
   # Holds the write token; never runs Gradle or other repository code.
   publish:
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.build.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION_NAME: ${{ needs.build.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -139,8 +174,7 @@ jobs:
         run: |
           # A re-run of an older build must not take "Latest" from a newer one (the app reads /releases/latest).
           latest_tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)
-          latest_build=${latest_tag##*.}
-          if [[ "$latest_build" =~ ^[0-9]+$ ]] && [ "$latest_build" -gt "$BUILD_NUMBER" ]; then
+          if [ -n "$latest_tag" ] && [ "$(printf '%s\n' "$latest_tag" "v$VERSION_NAME" | sort -V | tail -n 1)" != "v$VERSION_NAME" ]; then
             latest_flag="--latest=false"
           else
             latest_flag="--latest"
